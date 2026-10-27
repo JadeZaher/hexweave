@@ -1,0 +1,292 @@
+use super::credit;
+use super::cursor::{AnchorTarget, Cursor};
+use super::geometry::{Geometry, TILES, VISITS};
+use super::shared::Prefix;
+use super::state::{count, Boundary, State};
+use super::store_api::TileStore;
+use super::tile::Tile;
+use super::tile_gradients::TileGradients;
+use crate::topology::Mesh;
+use anyhow::{ensure, Context, Result};
+
+#[cfg(test)]
+#[path = "anchor_only_fixture.rs"]
+pub(super) mod anchor_only_fixture;
+
+pub(super) trait TrainingSource {
+    fn validate(&self, cursor: &Cursor) -> Result<()>;
+    fn pending_prefix(&self, cursor: &Cursor) -> Result<Vec<u8>>;
+    fn anchor_target(&self, cursor: &Cursor) -> Result<AnchorTarget>;
+    fn advance_anchor(&self, cursor: &mut Cursor) -> Result<()>;
+    /// Full source re-verification at a checkpoint boundary.
+    fn verify_boundary(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+pub(super) struct Frame {
+    pub input: Vec<f32>,
+    pub tile_id: usize,
+    pub version: u64,
+    pub action: Option<usize>,
+    pub depth: usize,
+}
+
+pub(super) struct Trace {
+    pub frames: Vec<Frame>,
+    pub history: Vec<f32>,
+    pub output: Vec<f32>,
+    pub tile_versions: [u64; TILES],
+}
+
+#[derive(Debug)]
+pub(super) enum Step {
+    Stopped,
+    #[allow(dead_code)]
+    Committed {
+        opportunity: u64,
+        loss: Option<f32>,
+        visits: usize,
+        prefix_bytes: usize,
+    },
+}
+
+pub(super) fn checked_tile(tile: &Tile, geometry: Geometry, id: usize, version: u64) -> Result<()> {
+    ensure!(
+        tile.id == id && tile.geometry == geometry && tile.version == version,
+        "tile identity, geometry or frozen version mismatch"
+    );
+    Ok(())
+}
+
+pub(super) fn destination(mesh: &Mesh, id: usize, action: Option<usize>) -> Result<Option<usize>> {
+    let Some(action) = action else {
+        return Ok(None);
+    };
+    let neighbors = mesh.neighbors(id)?;
+    ensure!(action <= neighbors.len(), "route action outside legal set");
+    Ok(neighbors.get(action).copied())
+}
+
+/// Pure realized route trace; weights and forward caches never enter frames.
+pub(super) fn forward_path<S: TileStore>(
+    store: &mut S,
+    geometry: Geometry,
+    prefix: &Prefix,
+    history: Vec<f32>,
+    random: &mut Option<u64>,
+    versions: [u64; TILES],
+) -> Result<Trace> {
+    let mesh = Mesh::new(1)?;
+    let (mut id, mut input) = (3, prefix.initial(geometry).to_vec());
+    let mut frames = Vec::with_capacity(VISITS);
+    for depth in 0..VISITS {
+        let (forward, action) = store.read(id, |tile| {
+            checked_tile(tile, geometry, id, versions[id])?;
+            let forward = tile.forward(&input, &prefix.memory, &history)?;
+            let action = if depth + 1 == VISITS {
+                None
+            } else {
+                Some(tile.route(&forward, &history, random)?)
+            };
+            Ok((forward, action))
+        })?;
+        let old_input = std::mem::replace(&mut input, forward.output);
+        frames.push(Frame {
+            input: old_input,
+            tile_id: id,
+            version: versions[id],
+            action,
+            depth,
+        });
+        match destination(&mesh, id, action)? {
+            Some(next) => id = next,
+            None => break,
+        }
+    }
+    Ok(Trace {
+        frames,
+        history,
+        output: input,
+        tile_versions: versions,
+    })
+}
+
+/// STOP is observed before entry; an entered opportunity completes or poisons.
+pub(super) fn step<S: TileStore, D: TrainingSource>(
+    state: &mut State,
+    store: &mut S,
+    source: &D,
+    stop_requested: bool,
+) -> Result<Step> {
+    state.validate_boundary()?;
+    source.validate(&state.cursor)?;
+    ensure!(
+        store.versions()? == state.tile_versions,
+        "store/state version mismatch"
+    );
+    if stop_requested {
+        return Ok(Step::Stopped);
+    }
+    let next = state
+        .global_opportunity
+        .checked_add(1)
+        .context("opportunity overflow")?;
+    let bytes = source.pending_prefix(&state.cursor)?;
+    let prefix = state.shared.prefix(&bytes)?;
+    drop(bytes);
+    state.boundary = Boundary::InFlight;
+    let result = complete(state, store, source, &prefix, next);
+    if result.is_err() {
+        state.boundary = Boundary::Poisoned;
+    }
+    result
+}
+
+fn complete<S: TileStore, D: TrainingSource>(
+    state: &mut State,
+    store: &mut S,
+    source: &D,
+    prefix: &Prefix,
+    next: u64,
+) -> Result<Step> {
+    let opportunity = state.global_opportunity;
+    let numerical_clock = state.numerical_clock()?;
+    let knobs = super::tuning::current();
+    let mut random = (!knobs.greedy_routes).then(|| {
+        state
+            .seed
+            .wrapping_add(numerical_clock.wrapping_mul(7919))
+            .wrapping_add(knobs.route_salt)
+    });
+    let previous_visits = state.counters.visits;
+    prune(state)?;
+    let loss = if state.assay.is_some() || opportunity.is_multiple_of(4) {
+        let history = state.history.mean(state.geometry)?;
+        let trace = forward_path(
+            store,
+            state.geometry,
+            prefix,
+            history,
+            &mut random,
+            state.tile_versions,
+        )?;
+        record_trace(state, &trace)?;
+        let target = source.anchor_target(&state.cursor)?;
+        let loss = credit::anchor(state, store, prefix, &trace, target.byte)?;
+        count(&mut state.counters.anchors, 1)?;
+        count(&mut state.counters.anchor_prefix_bytes, prefix.bytes.len())?;
+        state.counters.anchor_loss_sum += f64::from(loss);
+        ensure!(
+            state.counters.anchor_loss_sum.is_finite(),
+            "anchor loss metric overflow"
+        );
+        state.baseline = 0.9 * state.baseline + 0.1 * loss;
+        source.advance_anchor(&mut state.cursor)?;
+        Some(loss)
+    } else {
+        local(state, store, prefix, &mut random)?;
+        count(&mut state.counters.local_opportunities, 1)?;
+        count(&mut state.counters.local_prefix_bytes, prefix.bytes.len())?;
+        None
+    };
+    state.counters.maximum_prefix_bytes =
+        state.counters.maximum_prefix_bytes.max(prefix.bytes.len());
+    state.tile_versions = store.versions()?;
+    state.global_opportunity = next;
+    state.boundary = Boundary::Ready;
+    state.validate_boundary()?;
+    source.validate(&state.cursor)?;
+    Ok(Step::Committed {
+        opportunity,
+        loss,
+        visits: usize::try_from(state.counters.visits - previous_visits)?,
+        prefix_bytes: prefix.bytes.len(),
+    })
+}
+
+pub(super) fn prune(state: &mut State) -> Result<()> {
+    let removed = state.history.prune(
+        state.numerical_clock()?,
+        &state.tile_versions,
+        state.shared.version,
+    );
+    count(&mut state.counters.history_pruned, removed)
+}
+
+fn local<S: TileStore>(
+    state: &mut State,
+    store: &mut S,
+    prefix: &Prefix,
+    random: &mut Option<u64>,
+) -> Result<()> {
+    if !state.history.records.is_empty() {
+        let pairs: Vec<_> = state
+            .history
+            .replay()
+            .iter()
+            .map(|r| (r.features.as_slice(), r.correction.as_slice()))
+            .collect();
+        let update = state.predictor.train_joint(&pairs)?;
+        state.counters.predictor(update, true)?;
+    }
+    let mesh = Mesh::new(1)?;
+    let (mut id, mut input, mut seen) = (3, prefix.initial(state.geometry).to_vec(), 0u8);
+    for depth in 0..VISITS {
+        prune(state)?;
+        let history = state.history.mean(state.geometry)?;
+        let point = mesh.coordinates()[id];
+        let (output, action, transitions, version) = store.update(id, |tile| {
+            checked_tile(tile, state.geometry, id, state.tile_versions[id])?;
+            let forward = tile.forward(&input, &prefix.memory, &history)?;
+            let action = if depth + 1 == VISITS {
+                None
+            } else {
+                Some(tile.route(&forward, &history, random)?)
+            };
+            let features =
+                state
+                    .predictor
+                    .features(&input, &forward.output, &history, point.q, point.r)?;
+            let correction = state.predictor.correction(&features)?;
+            let mut gradient = TileGradients::zeros(state.geometry, id)?;
+            tile.backward(
+                &input,
+                &prefix.memory,
+                &history,
+                &correction,
+                None,
+                Some(&mut gradient),
+                None,
+            )?;
+            let transitions = tile.apply(&gradient)?;
+            Ok((forward.output, action, transitions, tile.version))
+        })?;
+        state.tile_versions[id] = version;
+        state.counters.transitions(transitions)?;
+        count(&mut state.counters.local_tile_updates, 1)?;
+        state
+            .counters
+            .visit(state.geometry, id, action, depth, &mut seen)?;
+        input = output;
+        match destination(&mesh, id, action)? {
+            Some(next) => id = next,
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn record_trace(state: &mut State, trace: &Trace) -> Result<()> {
+    let mut seen = 0u8;
+    for frame in &trace.frames {
+        state.counters.visit(
+            state.geometry,
+            frame.tile_id,
+            frame.action,
+            frame.depth,
+            &mut seen,
+        )?;
+    }
+    Ok(())
+}

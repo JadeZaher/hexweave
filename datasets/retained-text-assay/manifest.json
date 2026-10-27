@@ -1,0 +1,108 @@
+{
+  "answer_words_in_rotation_order": [
+    "soil",
+    "sand",
+    "clay",
+    "silt"
+  ],
+  "artifacts": {
+    "rows.jsonl": {
+      "bytes": 48584,
+      "sha256": "0ad6de82f45fb0cff217ad34ac2ebe60eaff2ef1ce32399ef892b36ecbfc40b9"
+    },
+    "schedule.json": {
+      "bytes": 15700,
+      "sha256": "7ceefd7f72531f01c3336af6779d89e4e1ac5cfd649ba2b5f94f62004501ad3c"
+    }
+  },
+  "encoding": "ASCII subset of UTF-8; LF record endings; completion LF is JSON escaped in rows.jsonl.",
+  "generator": {
+    "path": "materialize.py",
+    "sha256": "72877b2dfa5e0077503bbe661914a61a58e845dc9baedab86fe0baca0791d774"
+  },
+  "metadata": {
+    "all_64_prompts_unique": true,
+    "answer_words_per_group": {
+      "clay": 4,
+      "sand": 4,
+      "silt": 4,
+      "soil": 4
+    },
+    "completion_bytes_each": 5,
+    "completion_content_bytes_each": 4,
+    "completion_lf_bytes_each": 1,
+    "counterfactual_labels_questions_and_roles_preserved_values_rotated": true,
+    "every_counterfactual_answer_differs_from_foundation": true,
+    "foundation_and_retention_source_labels_disjoint": true,
+    "maximum_generated_buffer_bytes_including_eight_output_bytes": 93,
+    "maximum_greedy_readout_input_prefix_bytes": 92,
+    "maximum_teacher_forced_input_prefix_bytes": 89,
+    "probe_labels_intentionally_match_foundation_labels": true,
+    "prompt_bytes_by_group": {
+      "counterfactual": [
+        61
+      ],
+      "foundation": [
+        61
+      ],
+      "paraphrase": [
+        85
+      ],
+      "retention-stress": [
+        61
+      ]
+    },
+    "rows": 64,
+    "rows_per_group": {
+      "counterfactual": 16,
+      "foundation": 16,
+      "paraphrase": 16,
+      "retention-stress": 16
+    },
+    "stored_completion_bytes_all_rows": 320,
+    "training_and_probe_row_ids_disjoint": true,
+    "training_row_completion_bytes_once": 160,
+    "unique_completion_string_bytes": 20,
+    "unique_completion_strings": 4
+  },
+  "proposal": {
+    "path": "../LEARNING-CURVE-PROPOSAL.md",
+    "sha256": "f1e10da4e6d0fec806ea1c070a1f6d52a4ef72cb7b5b76b9501eea7f5b2f26dd"
+  },
+  "prospective_work_caps": {
+    "anchors_all_runs": 9600,
+    "anchors_per_run": 1600,
+    "arms_per_seed": 2,
+    "combined_observation_readouts_max": 25344,
+    "common_anchor_only_comparison_locals": 0,
+    "content_targets_all_runs": 7680,
+    "foundation_anchors_per_run": 1280,
+    "foundation_passes_per_run": 16,
+    "generated_byte_readouts_max": 13824,
+    "generated_completions_max": 1728,
+    "lf_targets_all_runs": 1920,
+    "model_dependent_adaptive_passes_or_reruns": 0,
+    "optional_schedule_comparison_actual_opportunities": 24000,
+    "optional_schedule_comparison_locals": 14400,
+    "retention_stress_anchors_per_run": 320,
+    "retention_stress_passes_per_run": 4,
+    "seed_arm_runs": 6,
+    "seeds": [
+      7,
+      17,
+      29
+    ],
+    "teacher_forced_completion_observations": 2304,
+    "teacher_forced_readouts_max": 11520
+  },
+  "provenance": "Entirely deterministic synthetic sample-label assignments. No private inputs, retrieved texts, scientific assertions or model outputs.",
+  "purpose": "Method-independent source-copy learning assay preparation; neither a runtime authorization nor an assistant benchmark.",
+  "schema": "prospective-retained-text-manifest-v1",
+  "status": "prospective-unadopted",
+  "unresolved_before_adoption": [
+    "Select and review the single method comparison; this corpus selects neither learning rule.",
+    "Review owned diagnostic identity, checkpoint, cooperative stop, admission, resource accounting and durable observation.",
+    "Obtain a fresh bounded runtime and explicit preserved-STOP handling decision; no E4 clock or allowance is reused.",
+    "Software and numerical validation remain unexecuted; metadata checks only ran during deterministic materialization."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    "files.exclude": { "**/__pycache__": true },
+    "search.exclude": { "**/work": true, "**/target": true },
+    "editor.rulers": [100],
+    "editor.insertSpaces": true,
+    "editor.tabSize": 4,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true
+  }
+}

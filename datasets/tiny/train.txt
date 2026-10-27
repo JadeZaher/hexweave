@@ -1,0 +1,10 @@
+Bees learn by watching another bee reach a flower.
+A small hive shares useful routes through a quiet garden.
+Each worker can visit one patch, return, and try a different path.
+The signal remembers a correction, but the next flower is still unknown.
+Short routes save work when they carry enough useful information.
+A router may stop early or revisit a place where new evidence appeared.
+Learning happens on one local surface while other surfaces remain on disk.
+Weights begin ternary and stay ternary as a bounded pulse changes them.
+An honest experiment measures useful learning as well as elapsed time.
+The warm sun lights the garden and the bees return to their hive.

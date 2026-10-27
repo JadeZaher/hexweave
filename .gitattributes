@@ -1,0 +1,11 @@
+* text=auto
+*.rs text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.ps1 text eol=crlf
+# Hash-pinned artifacts: store exact bytes, never normalize line endings.
+datasets/** -text
+docs/*CONTRACT*.md -text
+benchmarks/fixtures/** -text

@@ -1,0 +1,10 @@
+[build]
+jobs = 2
+target-dir = "work/target"
+
+[env]
+RAYON_NUM_THREADS = { value = "2", force = true }
+CANDLE_NUM_THREADS = { value = "1", force = true }
+OMP_NUM_THREADS = { value = "1", force = true }
+MKL_NUM_THREADS = { value = "1", force = true }
+OPENBLAS_NUM_THREADS = { value = "1", force = true }

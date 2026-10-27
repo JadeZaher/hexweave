@@ -1,0 +1,104 @@
+{
+  "status": "authored-unreviewed",
+  "model_trained": false,
+  "scope": "ordinary data generation/readback, not tests or independent review",
+  "files": [
+    {
+      "path": "author_dataset.py",
+      "bytes": 22494,
+      "sha256": "ad434fd862458f943f551b7e15c3a9b8f1d42219f8163f200eda620d0694a688"
+    },
+    {
+      "path": "development.jsonl",
+      "bytes": 20419,
+      "sha256": "72e481e6566809d8375215d150bdf57989bbe729acf530549205b0613d7e5e0f"
+    },
+    {
+      "path": "manifest.json",
+      "bytes": 5427,
+      "sha256": "b7e14d316318a2c44b88051d5f68ef11892bdd576fd3cadcdfe53a11a27d19bd"
+    },
+    {
+      "path": "README.md",
+      "bytes": 7804,
+      "sha256": "67c9c950ceffbfbe596a0baef51af5835d536569aab9e23dcec11db38c182a5e"
+    },
+    {
+      "path": "source-pins.json",
+      "bytes": 6665,
+      "sha256": "2b5613a6b68437dbb6d69ed049c08461108c2eb83e06a30b881dadf18638aa70"
+    },
+    {
+      "path": "sources/bench/AGENTS.md",
+      "bytes": 1289,
+      "sha256": "a6cb69fea00a409aaf84dd23d10f40f4365b6f648fbf2953c091b3a9f120cd50"
+    },
+    {
+      "path": "sources/benchmarks/fixtures/README.md",
+      "bytes": 486,
+      "sha256": "dc88a1a32e820a6e9136ea6023996e674e8df457850aa5a03e5136e2de60fdbf"
+    },
+    {
+      "path": "sources/docs/ARCHITECTURE.md",
+      "bytes": 6760,
+      "sha256": "09512ee4ee2e590349a98bf92aa0115330c65ca543948133cf10758dc4b1467d"
+    },
+    {
+      "path": "sources/docs/BENCHMARKS.md",
+      "bytes": 6521,
+      "sha256": "9d09c2931e535992b9c6ccf939f1d17ebcf19832dcaed8512e0832ac29c5730a"
+    },
+    {
+      "path": "sources/docs/TEXT-PULSE.md",
+      "bytes": 5679,
+      "sha256": "f576ad6cc063f0e916929e0912558b0b9838d00cdaffebce4c045f93ed7013e8"
+    },
+    {
+      "path": "sources/docs/TRAINING-PULSE.md",
+      "bytes": 5209,
+      "sha256": "c38942a39ba3e859546243cccf21fe649bef5115eb97ce1c05955258eaf81808"
+    },
+    {
+      "path": "sources/src/model/AGENTS.md",
+      "bytes": 3805,
+      "sha256": "64a7e83579d38dbe331b67d4bc3250be03b82aadb098b89e3038d32e3ef8d93f"
+    },
+    {
+      "path": "sources/src/ternary/AGENTS.md",
+      "bytes": 3002,
+      "sha256": "d6c49c9bd798b38ed1515aaf5b8bf51fd00f03d07caf47784a993b44af315e3e"
+    },
+    {
+      "path": "sources/src/text/AGENTS.md",
+      "bytes": 11890,
+      "sha256": "e03bdb811ae09d1ed2b2c27b31e378d8b0b02795f50cdf99b349629221dbaf8c"
+    },
+    {
+      "path": "train.jsonl",
+      "bytes": 105860,
+      "sha256": "4df065675ab7c5be51f41395b77d8e31825c58f6c5c96f5e0c826f7d8fe82a42"
+    }
+  ],
+  "shape": {
+    "train.jsonl": {
+      "rows": 60,
+      "answerable": 52,
+      "abstentions": 8,
+      "max_sequence_bytes": 853,
+      "scored_completion_bytes": 7111
+    },
+    "development.jsonl": {
+      "rows": 12,
+      "answerable": 10,
+      "abstentions": 2,
+      "max_sequence_bytes": 837,
+      "scored_completion_bytes": 1361
+    }
+  },
+  "source_snapshot_files": 9,
+  "source_snapshot_bytes": 44641,
+  "readback_issues": [],
+  "final_evaluation_questions_authored": false,
+  "t1_heldout_dataset_read": false,
+  "modified_paths_scope": "owned proposal datasets/project-docs only"
+}

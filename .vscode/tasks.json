@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Hexweave: plan local candidate (no allocation)",
+      "type": "process",
+      "command": "cargo",
+      "args": ["run", "--locked", "--", "plan", "--config", "configs/local-287m.json"],
+      "options": { "env": { "CARGO_TARGET_DIR": "${workspaceFolder}/work/target" } },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "Hexweave: bounded CPU fixture",
+      "type": "process",
+      "command": "cargo",
+      "args": ["run", "--locked", "--", "smoke", "--steps", "4", "--seed", "7"],
+      "options": { "env": { "CARGO_TARGET_DIR": "${workspaceFolder}/work/target" } },
+      "problemMatcher": "$rustc"
+    },
+    {
+      "label": "Hexweave: final integrated validation",
+      "type": "process",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/validate.ps1"],
+      "problemMatcher": [],
+      "group": { "kind": "test", "isDefault": true }
+    }
+  ]
+}

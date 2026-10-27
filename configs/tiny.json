@@ -1,0 +1,13 @@
+{
+  "name": "tiny",
+  "radius": 1,
+  "hidden": 16,
+  "ffn": 32,
+  "vocab": 256,
+  "heads": 2,
+  "context": 8,
+  "max_depth": 3,
+  "max_frontier": 2,
+  "max_visits": 8,
+  "fanout": false
+}

@@ -1,0 +1,148 @@
+{
+  "schema": "hexweave-docs-qa-v1",
+  "dataset_version": "t1-snapshot-d0-v1",
+  "status": "authored-unreviewed",
+  "model_trained": false,
+  "source_as_of": "T1 source snapshot, 2026-10-24; not a claim about current code",
+  "source_pin_manifest_sha256": "2b5613a6b68437dbb6d69ed049c08461108c2eb83e06a30b881dadf18638aa70",
+  "sources": [
+    {
+      "source_id": "T01",
+      "partition": "train",
+      "original_path": "docs/TRAINING-PULSE.md",
+      "snapshot_path": "sources/docs/TRAINING-PULSE.md",
+      "sha256": "c38942a39ba3e859546243cccf21fe649bef5115eb97ce1c05955258eaf81808",
+      "bytes": 5209
+    },
+    {
+      "source_id": "T02",
+      "partition": "train",
+      "original_path": "docs/TEXT-PULSE.md",
+      "snapshot_path": "sources/docs/TEXT-PULSE.md",
+      "sha256": "f576ad6cc063f0e916929e0912558b0b9838d00cdaffebce4c045f93ed7013e8",
+      "bytes": 5679
+    },
+    {
+      "source_id": "T03",
+      "partition": "train",
+      "original_path": "src/text/AGENTS.md",
+      "snapshot_path": "sources/src/text/AGENTS.md",
+      "sha256": "e03bdb811ae09d1ed2b2c27b31e378d8b0b02795f50cdf99b349629221dbaf8c",
+      "bytes": 11890
+    },
+    {
+      "source_id": "T04",
+      "partition": "train",
+      "original_path": "src/ternary/AGENTS.md",
+      "snapshot_path": "sources/src/ternary/AGENTS.md",
+      "sha256": "d6c49c9bd798b38ed1515aaf5b8bf51fd00f03d07caf47784a993b44af315e3e",
+      "bytes": 3002
+    },
+    {
+      "source_id": "D01",
+      "partition": "development",
+      "original_path": "docs/BENCHMARKS.md",
+      "snapshot_path": "sources/docs/BENCHMARKS.md",
+      "sha256": "9d09c2931e535992b9c6ccf939f1d17ebcf19832dcaed8512e0832ac29c5730a",
+      "bytes": 6521
+    },
+    {
+      "source_id": "D02",
+      "partition": "development",
+      "original_path": "bench/AGENTS.md",
+      "snapshot_path": "sources/bench/AGENTS.md",
+      "sha256": "a6cb69fea00a409aaf84dd23d10f40f4365b6f648fbf2953c091b3a9f120cd50",
+      "bytes": 1289
+    },
+    {
+      "source_id": "D03",
+      "partition": "development",
+      "original_path": "benchmarks/fixtures/README.md",
+      "snapshot_path": "sources/benchmarks/fixtures/README.md",
+      "sha256": "dc88a1a32e820a6e9136ea6023996e674e8df457850aa5a03e5136e2de60fdbf",
+      "bytes": 486
+    },
+    {
+      "source_id": "E01",
+      "partition": "reserved_evaluation_source",
+      "original_path": "docs/ARCHITECTURE.md",
+      "snapshot_path": "sources/docs/ARCHITECTURE.md",
+      "sha256": "09512ee4ee2e590349a98bf92aa0115330c65ca543948133cf10758dc4b1467d",
+      "bytes": 6760
+    },
+    {
+      "source_id": "E02",
+      "partition": "reserved_evaluation_source",
+      "original_path": "src/model/AGENTS.md",
+      "snapshot_path": "sources/src/model/AGENTS.md",
+      "sha256": "64a7e83579d38dbe331b67d4bc3250be03b82aadb098b89e3038d32e3ef8d93f",
+      "bytes": 3805
+    }
+  ],
+  "artifacts": {
+    "train.jsonl": {
+      "sha256": "4df065675ab7c5be51f41395b77d8e31825c58f6c5c96f5e0c826f7d8fe82a42",
+      "bytes": 105860,
+      "rows": 60,
+      "answerable": 52,
+      "abstention": 8,
+      "fact_families": 60,
+      "unique_evidence_spans": 41,
+      "max_utf8_bytes": {
+        "question": 91,
+        "evidence": 562,
+        "completion": 164,
+        "prompt": 705,
+        "envelope": 69,
+        "sequence": 853
+      },
+      "total_supervised_completion_bytes": 7111
+    },
+    "development.jsonl": {
+      "sha256": "72e481e6566809d8375215d150bdf57989bbe729acf530549205b0613d7e5e0f",
+      "bytes": 20419,
+      "rows": 12,
+      "answerable": 10,
+      "abstention": 2,
+      "fact_families": 12,
+      "unique_evidence_spans": 9,
+      "max_utf8_bytes": {
+        "question": 98,
+        "evidence": 561,
+        "completion": 152,
+        "prompt": 708,
+        "envelope": 67,
+        "sequence": 837
+      },
+      "total_supervised_completion_bytes": 1361
+    }
+  },
+  "prompt_template": "Use evidence only; otherwise UNKNOWN.\nSOURCE {source_id}:{start}-{end}\n{evidence}\nQ: {question}\nA: ",
+  "completion_format": "compact UTF-8 JSON with ordered answer,citation keys and one terminating newline",
+  "abstention_completion": {
+    "answer": "UNKNOWN",
+    "citation": null
+  },
+  "limits": {
+    "envelope_bytes": 80,
+    "question_bytes": 144,
+    "evidence_bytes": 608,
+    "completion_bytes": 192,
+    "sequence_positions": 1024
+  },
+  "training_target_scope": "all completion UTF-8 bytes including JSON/citation/terminating newline; exclude prompt and JSONL metadata; stop generation on newline or 192 bytes",
+  "external_sources_fetched": false,
+  "final_evaluation_authored": false,
+  "provenance": "Handwritten QA by /root/review_contracts; exact excerpts selected from hashed local snapshots. No synthetic paraphrase expansion.",
+  "prohibited_evaluation_fact_overlap": [
+    "shared generic routing/ternary concepts already present in train",
+    "text-vs-FP32 comparisons whose answers are already in training source",
+    "generic no-quality/no-scaling conclusions",
+    "any paraphrase of an existing train/development fact_family_id"
+  ],
+  "review_requirements": [
+    "independent semantic/source support review",
+    "confirm fact-family partition separation",
+    "independent final evaluation authorship; do not use development as final evaluation"
+  ]
+}

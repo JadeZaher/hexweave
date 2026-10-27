@@ -1,0 +1,271 @@
+{
+  "captured_utc": "2026-10-24T16:40:35.796561+00:00",
+  "source_root": "C:\\Users\\atooz\\Programming\\hexweave",
+  "scope": "planning-only; no QA authored, training or evaluation executed",
+  "inventory": {
+    "files": 30,
+    "raw_bytes": 164142
+  },
+  "candidate_files": [
+    {
+      "path": "docs/TRAINING-PULSE.md",
+      "family": "train_ternary_text",
+      "bytes": 5209,
+      "sha256": "c38942a39ba3e859546243cccf21fe649bef5115eb97ce1c05955258eaf81808",
+      "section_bytes": [
+        586,
+        839,
+        2006,
+        1778
+      ]
+    },
+    {
+      "path": "docs/TEXT-PULSE.md",
+      "family": "train_ternary_text",
+      "bytes": 5679,
+      "sha256": "f576ad6cc063f0e916929e0912558b0b9838d00cdaffebce4c045f93ed7013e8",
+      "section_bytes": [
+        917,
+        2467,
+        1469,
+        793
+      ]
+    },
+    {
+      "path": "src/text/AGENTS.md",
+      "family": "train_ternary_text",
+      "bytes": 11890,
+      "sha256": "e03bdb811ae09d1ed2b2c27b31e378d8b0b02795f50cdf99b349629221dbaf8c",
+      "section_bytes": [
+        802,
+        1740,
+        2655,
+        1370,
+        2012,
+        2590,
+        721
+      ]
+    },
+    {
+      "path": "src/ternary/AGENTS.md",
+      "family": "train_ternary_text",
+      "bytes": 3002,
+      "sha256": "d6c49c9bd798b38ed1515aaf5b8bf51fd00f03d07caf47784a993b44af315e3e",
+      "section_bytes": [
+        2597,
+        405
+      ]
+    },
+    {
+      "path": "docs/BENCHMARKS.md",
+      "family": "development_benchmark",
+      "bytes": 6521,
+      "sha256": "9d09c2931e535992b9c6ccf939f1d17ebcf19832dcaed8512e0832ac29c5730a",
+      "section_bytes": [
+        764,
+        718,
+        1777,
+        3262
+      ]
+    },
+    {
+      "path": "bench/AGENTS.md",
+      "family": "development_benchmark",
+      "bytes": 1289,
+      "sha256": "a6cb69fea00a409aaf84dd23d10f40f4365b6f648fbf2953c091b3a9f120cd50",
+      "section_bytes": [
+        1289
+      ]
+    },
+    {
+      "path": "benchmarks/fixtures/README.md",
+      "family": "development_benchmark",
+      "bytes": 486,
+      "sha256": "dc88a1a32e820a6e9136ea6023996e674e8df457850aa5a03e5136e2de60fdbf",
+      "section_bytes": [
+        486
+      ]
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "family": "heldout_fp32_reference",
+      "bytes": 6760,
+      "sha256": "09512ee4ee2e590349a98bf92aa0115330c65ca543948133cf10758dc4b1467d",
+      "section_bytes": [
+        1589,
+        1058,
+        1057,
+        1069,
+        931,
+        462,
+        544
+      ]
+    },
+    {
+      "path": "src/model/AGENTS.md",
+      "family": "heldout_fp32_reference",
+      "bytes": 3805,
+      "sha256": "64a7e83579d38dbe331b67d4bc3250be03b82aadb098b89e3038d32e3ef8d93f",
+      "section_bytes": [
+        329,
+        2248,
+        1228
+      ]
+    }
+  ],
+  "candidate_total_bytes": 44641,
+  "families": {
+    "train_ternary_text": {
+      "files": 4,
+      "raw_bytes": 25780,
+      "section_bytes": {
+        "n": 17,
+        "min": 405,
+        "p25": 802,
+        "median": 1469,
+        "p75": 2012,
+        "p90": 2597,
+        "max": 2655
+      },
+      "paragraph_blocks_ge80_bytes": 58,
+      "paragraph_blocks_fit608": 52
+    },
+    "development_benchmark": {
+      "files": 3,
+      "raw_bytes": 8296,
+      "section_bytes": {
+        "n": 6,
+        "min": 486,
+        "p25": 718,
+        "median": 764,
+        "p75": 1777,
+        "p90": 3262,
+        "max": 3262
+      },
+      "paragraph_blocks_ge80_bytes": 20,
+      "paragraph_blocks_fit608": 16
+    },
+    "heldout_fp32_reference": {
+      "files": 2,
+      "raw_bytes": 10565,
+      "section_bytes": {
+        "n": 10,
+        "min": 329,
+        "p25": 544,
+        "median": 1057,
+        "p75": 1228,
+        "p90": 1589,
+        "max": 2248
+      },
+      "paragraph_blocks_ge80_bytes": 24,
+      "paragraph_blocks_fit608": 21
+    }
+  },
+  "section_bytes": {
+    "n": 33,
+    "min": 329,
+    "p25": 764,
+    "median": 1069,
+    "p75": 1778,
+    "p90": 2590,
+    "max": 3262
+  },
+  "prompt_scenarios": [
+    {
+      "assumed_question_bytes": 48,
+      "fixed_envelope_bytes": 80,
+      "reserved_answer_bytes": 192,
+      "whole_section_prompt_bytes": {
+        "n": 33,
+        "min": 457,
+        "p25": 892,
+        "median": 1197,
+        "p75": 1906,
+        "p90": 2718,
+        "max": 3390
+      },
+      "whole_section_prompt_plus_answer_bytes": {
+        "n": 33,
+        "min": 649,
+        "p25": 1084,
+        "median": 1389,
+        "p75": 2098,
+        "p90": 2910,
+        "max": 3582
+      },
+      "fits_complete_sequence": {
+        "128": 0,
+        "512": 0,
+        "768": 2,
+        "1024": 6
+      }
+    },
+    {
+      "assumed_question_bytes": 96,
+      "fixed_envelope_bytes": 80,
+      "reserved_answer_bytes": 192,
+      "whole_section_prompt_bytes": {
+        "n": 33,
+        "min": 505,
+        "p25": 940,
+        "median": 1245,
+        "p75": 1954,
+        "p90": 2766,
+        "max": 3438
+      },
+      "whole_section_prompt_plus_answer_bytes": {
+        "n": 33,
+        "min": 697,
+        "p25": 1132,
+        "median": 1437,
+        "p75": 2146,
+        "p90": 2958,
+        "max": 3630
+      },
+      "fits_complete_sequence": {
+        "128": 0,
+        "512": 0,
+        "768": 1,
+        "1024": 6
+      }
+    },
+    {
+      "assumed_question_bytes": 144,
+      "fixed_envelope_bytes": 80,
+      "reserved_answer_bytes": 192,
+      "whole_section_prompt_bytes": {
+        "n": 33,
+        "min": 553,
+        "p25": 988,
+        "median": 1293,
+        "p75": 2002,
+        "p90": 2814,
+        "max": 3486
+      },
+      "whole_section_prompt_plus_answer_bytes": {
+        "n": 33,
+        "min": 745,
+        "p25": 1180,
+        "median": 1485,
+        "p75": 2194,
+        "p90": 3006,
+        "max": 3678
+      },
+      "fits_complete_sequence": {
+        "128": 0,
+        "512": 0,
+        "768": 1,
+        "1024": 6
+      }
+    }
+  ],
+  "cross_split_identical_paragraphs_ge80_bytes": [],
+  "recommended_context_bytes": 1024,
+  "maximum_evidence_bytes": 608,
+  "limitations": [
+    "Question lengths and response allowance are declared assumptions, not measured QA examples.",
+    "Paragraph sizes are planning proxies; fenced code/tables require structure-aware manual chunk review.",
+    "Exact-paragraph collision absence is not semantic decontamination.",
+    "Source hashes must be revalidated before building a versioned dataset."
+  ]
+}

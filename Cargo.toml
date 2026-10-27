@@ -1,0 +1,18 @@
+[package]
+name = "hexweave"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "F-inspired hex routing language-model research scaffold"
+
+[dependencies]
+anyhow = "1.0"
+candle-core = { version = "=0.11.0", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "=0.10.9"
+
+[profile.release]
+debug = 1
+
+[workspace]

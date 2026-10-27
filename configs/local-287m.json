@@ -1,0 +1,13 @@
+{
+  "name": "local-287m-planning-only",
+  "radius": 3,
+  "hidden": 768,
+  "ffn": 2048,
+  "vocab": 32768,
+  "heads": 12,
+  "context": 256,
+  "max_depth": 12,
+  "max_frontier": 4,
+  "max_visits": 48,
+  "fanout": true
+}

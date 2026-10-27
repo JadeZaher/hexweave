@@ -1,0 +1,13 @@
+{
+  "name": "dev-81m-planning-only",
+  "radius": 2,
+  "hidden": 512,
+  "ffn": 1536,
+  "vocab": 32768,
+  "heads": 8,
+  "context": 256,
+  "max_depth": 8,
+  "max_frontier": 4,
+  "max_visits": 32,
+  "fanout": false
+}

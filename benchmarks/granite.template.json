@@ -1,0 +1,42 @@
+{
+  "schema": "hexweave-local-benchmark-v1",
+  "purpose": "deployment_comparison",
+  "model": {
+    "id": "ibm-granite/granite-4.0-h-350m",
+    "revision": "REPLACE_WITH_IMMUTABLE_40_HEX_MODEL_REVISION",
+    "kind": "instruct",
+    "artifacts": [
+      {"role": "weights", "path": "REPLACE_WITH_LOCAL_WEIGHT_FILE", "sha256": "REPLACE_WITH_SHA256"},
+      {"role": "tokenizer", "path": "REPLACE_WITH_LOCAL_TOKENIZER_FILE", "sha256": "REPLACE_WITH_SHA256"},
+      {"role": "template", "path": "REPLACE_WITH_LOCAL_PROMPT_TEMPLATE_FILE", "sha256": "REPLACE_WITH_SHA256"}
+    ]
+  },
+  "backend": {
+    "name": "REPLACE_WITH_LOCAL_BACKEND",
+    "version": "REPLACE_WITH_EXACT_VERSION",
+    "endpoint": "http://127.0.0.1:1234",
+    "model_alias": "REPLACE_WITH_LOADED_MODEL_ALIAS",
+    "compute_dtype": "REPLACE_WITH_DTYPE",
+    "quantization": "REPLACE_WITH_QUANTIZATION_OR_NONE",
+    "context_tokens": 2048,
+    "threads": 4,
+    "kv_cache_dtype": "REPLACE_WITH_KV_CACHE_DTYPE"
+  },
+  "dataset": {
+    "id": "REPLACE_WITH_DATASET_ID",
+    "revision": "REPLACE_WITH_IMMUTABLE_REVISION",
+    "split": "test",
+    "path": "REPLACE_WITH_LOCAL_SEALED_JSONL",
+    "sha256": "REPLACE_WITH_SHA256",
+    "prompt_format": "raw_completion"
+  },
+  "generation": {"max_tokens": 128, "temperature": 0, "top_p": 1, "seed": 7, "stop": []},
+  "budget": {
+    "examples": 30,
+    "repetitions": 3,
+    "warmups": 1,
+    "timeout_seconds": 30,
+    "max_wall_seconds": 300,
+    "max_response_bytes": 1048576
+  }
+}
