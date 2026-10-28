@@ -57,6 +57,19 @@ training fit has been measured.
   answerable cases. Re-dealing removed citation memorization; a copy circuit
   for the variable-offset citation did not form within ~1M anchors. Best states
   are in each run's `out/best/`.
+- `work/core-runs/tiny-ternary-s7` and `tiny-float-s7` (TinyStories corpus,
+  window 512, seed 7, rate 0.003, 8-hour deadline; 1,409,322 and 1,829,605
+  anchors, one pass, peak 92 MiB each): best held-out 2.623 bits/byte
+  (ternary, 1.16M anchors) and 2.612 (f32, 1.52M); final 2.761 and 2.669.
+  At equal bytes the two curves agree within evaluation noise (1M: 2.756 vs
+  2.787); f32 trained ~30% faster (66 vs 50 anchors/s, scalar trit decoding).
+  The f32 model ternarized afterwards scored 2.681 (+0.01); the ternary model's
+  latents read as f32 scored 3.015 (+0.25). A byte 5-gram trained on the same
+  bytes scores 1.68 (1 MB) and 1.59 (2 MB). Greedy story continuations loop on
+  single letters. Training (prequential, no byte seen twice) logged 2.19-2.25
+  bits/byte versus 2.67-2.76 held-out: evaluation and generation pass zero
+  history where training uses the previous step's corrections, the likeliest
+  cause of that gap; history-consistent evaluation is not yet implemented.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 
