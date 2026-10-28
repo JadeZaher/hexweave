@@ -6,6 +6,7 @@ use super::assay_state::MANIFEST_SHA;
 use super::core_checkpoint::{self, PROTOCOL};
 use super::core_drill::Drill;
 use super::core_eval;
+use super::core_redeal::CitationRedeal;
 use super::data::Dataset;
 use super::data_contracts::Split;
 use super::execution::{self, TrainingSource};
@@ -28,6 +29,9 @@ enum Data {
     Science {
         root: PathBuf,
         manifest_sha256: String,
+        /// Re-deal each epoch's SOURCE values and citations (`core_redeal`); absent means off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redeal_citations: bool,
     },
     /// Unbounded retrieval drill over the retained-text assay templates.
     Drill { root: PathBuf },
@@ -102,14 +106,24 @@ pub(super) fn run(path: &Path) -> Result<Value> {
         Data::Science {
             root,
             manifest_sha256,
+            redeal_citations,
         } => {
             let train = Dataset::open(root, manifest_sha256, Split::Train)?;
             let dev = Dataset::open(root, manifest_sha256, Split::Development)?;
             let start = State::new(geometry, config.seed, &train)?;
             let cases = config.eval_cases;
-            drive(&config, &train, start, &mut |state, store| {
+            let evaluate = &mut |state: &State, store: &mut ResidentStore| {
                 core_eval::science(state, store, &train, &dev, cases)
-            })
+            };
+            if *redeal_citations {
+                let source = CitationRedeal {
+                    inner: &train,
+                    seed: config.seed,
+                };
+                drive(&config, &source, start, evaluate)
+            } else {
+                drive(&config, &train, start, evaluate)
+            }
         }
         Data::Drill { root } => {
             let assay = AssaySource::open(root, MANIFEST_SHA)?;
@@ -220,6 +234,7 @@ fn drive<S: TrainingSource>(
             .context("wall_seconds overflows the clock")?,
     );
     let mut marks = Marks::new(&state);
+    let mut best = core_eval::best_so_far(&config.out);
     let mut last = if state.global_opportunity == 0 {
         Some(record(
             &mut log, &state, &mut store, &mut marks, evaluate, started,
@@ -249,6 +264,9 @@ fn drive<S: TrainingSource>(
         } else {
             None
         };
+        if let Some(line) = &last {
+            core_eval::keep_best(&config.out, &state, &store, &identity, line, &mut best)?;
+        }
     };
     let n = state.global_opportunity;
     let checkpoint = match core_checkpoint::latest(&config.out)? {
@@ -259,6 +277,7 @@ fn drive<S: TrainingSource>(
         Some(line) => line,
         None => record(&mut log, &state, &mut store, &mut marks, evaluate, started)?,
     };
+    core_eval::keep_best(&config.out, &state, &store, &identity, &last, &mut best)?;
     let report = json!({
         "protocol": PROTOCOL, "terminal": terminal, "anchors": n, "epoch": state.cursor.epoch,
         "wall_seconds": started.elapsed().as_secs_f64(), "identity_sha256": identity,

@@ -15,6 +15,7 @@ mod core_checkpoint;
 mod core_codec;
 mod core_drill;
 mod core_eval;
+mod core_redeal;
 mod core_train;
 mod credit;
 mod cursor;

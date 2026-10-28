@@ -49,7 +49,16 @@ from anchor 0. A fresh run refuses existing checkpoints. Changing `anchors` or
 
 Data: `science` trains on a pinned QA Dataset's train split and evaluates the
 development split with `evaluation::evaluate` (teacher-forced NLL, coverage,
-greedy JSON answers, exact answer/citation) plus four train-row samples.
+greedy JSON answers, exact answer/citation) plus four train-row samples. Every
+answerable row cites exactly its prompt's single `SOURCE` value, but with six
+train labels the 72-row run memorized them (dev outputs cited train source T06,
+while dev prompts name D01-D06). `redeal_citations: true` (`core_redeal`)
+replaces that value with a fresh same-shape one per (row, epoch) in the prompt
+and its citation, keeping every length, kind and cursor of the inner dataset,
+so citing can only be learned as copying; dev is never re-dealt. Science runs
+keep their lowest-dev-NLL state under `out/best/` (`selection.json` holds the
+anchors and score; resume reads it), since the newest-three rotation had
+pruned the 72-row run's best state (80k anchors) once the 140k checkpoint landed.
 `drill` (`core_drill`, v2) replays the assay schedule in 1,600-anchor cycles
 (16 foundation passes, then 4 retention-stress passes) and re-deals values and
 the asked key with `tuning_sources::redeal` under the harness's per-cycle salt,

@@ -6,7 +6,9 @@ use super::assay_state::{Progress, MANIFEST_SHA};
 use super::assay_update::Rule;
 use super::core_codec::encode_latents;
 use super::core_drill::{Drill, CYCLE};
+use super::core_redeal::{redeal_citation, CitationRedeal};
 use super::core_train::identity_of;
+use super::cursor::Cursor;
 use super::execution::{self, TrainingSource};
 use super::generation::Terminal;
 use super::geometry::Geometry;
@@ -200,5 +202,68 @@ fn drill_stream_is_the_harness_stream_and_answers_need_the_key() -> Result<()> {
             "drill answer must be the asked key's value"
         );
     }
+    Ok(())
+}
+
+/// The value after `marker` up to `end`, if `marker` occurs.
+fn value_after(text: &[u8], marker: &[u8], end: u8) -> Option<Vec<u8>> {
+    let at = text.windows(marker.len()).position(|w| w == marker)? + marker.len();
+    Some(
+        text[at..]
+            .iter()
+            .take_while(|&&b| b != end)
+            .copied()
+            .collect(),
+    )
+}
+
+/// Citation re-deal through the real dataset cursor: every trained citation byte equals the
+/// prompt's re-dealt SOURCE byte; lengths are kept, null citations stay, epochs re-deal anew.
+#[test]
+fn citation_redeal_trains_citing_as_copying_the_prompt_source() -> Result<()> {
+    let fixture = super::data_tests::Fixture::new();
+    let dataset = fixture.open()?;
+    let redeal = CitationRedeal {
+        inner: &dataset,
+        seed: 7,
+    };
+    let (mut cursor, mut copied) = (Cursor::start(&dataset)?, 0);
+    for _ in 0..1_500 {
+        let prompt = dataset.record(cursor.row_index)?.prompt.len();
+        let prefix = redeal.pending_prefix(&cursor)?;
+        let source = value_after(&prefix, b"\nSOURCE ", b'\n').context("SOURCE line")?;
+        if let Some(cited) = value_after(&prefix[prompt..], b"\"citation\":\"", b'"') {
+            if cited.len() < source.len() {
+                assert_eq!(redeal.anchor_target(&cursor)?.byte, source[cited.len()]);
+                copied += 1;
+            }
+        }
+        redeal.advance_anchor(&mut cursor)?;
+    }
+    assert!(
+        copied > 100,
+        "walk must cross many citations, crossed {copied}"
+    );
+    for index in 0..dataset.len() {
+        let row = dataset.record(index)?;
+        let deal = |epoch: u64| {
+            redeal_citation(
+                &row.prompt,
+                &row.completion,
+                tuning::hash(7, &[index as u64, epoch]),
+            )
+        };
+        let ((prompt, completion), (later, _)) = (deal(0)?, deal(1)?);
+        assert_eq!(
+            (prompt.len(), completion.len()),
+            (row.prompt.len(), row.completion.len())
+        );
+        assert_ne!(prompt, later, "each epoch re-deals the SOURCE value");
+        assert_ne!(prompt, row.prompt, "the original SOURCE value is replaced");
+        if value_after(&completion, b"\"citation\":\"", b'"').is_none() {
+            assert!(completion.ends_with(b"\"citation\":null}\n"), "row {index}");
+        }
+    }
+    assert!(redeal_citation(b"no source line", b"{}", 1).is_err());
     Ok(())
 }

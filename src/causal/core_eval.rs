@@ -1,6 +1,8 @@
-//! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
+//! Core-path evaluations: science dev generation, retrieval-drill probes and best-checkpoint
+//! selection; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
+use super::core_checkpoint;
 use super::data::Dataset;
 use super::evaluation::{self, Limits, Loss};
 use super::generation::{self, Terminal};
@@ -9,9 +11,45 @@ use super::state::State;
 use super::tuning_measure;
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::path::Path;
 
 fn per_byte(loss: &Loss) -> f64 {
     loss.nll_sum / loss.targets.max(1) as f64
+}
+
+/// Lowest dev NLL in `out/best/selection.json`, or infinity before any science selection.
+pub(super) fn best_so_far(out: &Path) -> f64 {
+    std::fs::read(out.join("best").join("selection.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|selection| selection["dev_nll_per_byte"].as_f64())
+        .unwrap_or(f64::INFINITY)
+}
+
+/// Keep the lowest-dev-NLL science state as a checkpoint under `out/best`, with its score.
+pub(super) fn keep_best(
+    out: &Path,
+    state: &State,
+    store: &ResidentStore,
+    identity: &str,
+    line: &Value,
+    best: &mut f64,
+) -> Result<()> {
+    let Some(score) = line["eval"]["dev_nll_per_byte"].as_f64() else {
+        return Ok(());
+    };
+    if state.global_opportunity == 0 || !score.is_finite() || score >= *best {
+        return Ok(());
+    }
+    let root = out.join("best");
+    core_checkpoint::save(&root, state, store, identity)?;
+    let selection = json!({ "anchors": state.global_opportunity, "dev_nll_per_byte": score });
+    std::fs::write(
+        root.join("selection.json"),
+        serde_json::to_vec_pretty(&selection)?,
+    )?;
+    *best = score;
+    Ok(())
 }
 
 /// Public dev-set assessment (teacher-forced NLL plus greedy JSON answers) and train samples.

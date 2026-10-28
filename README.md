@@ -56,12 +56,14 @@ python -B -m scripts.core_owner --config work/core-runs/<run>.json
 ```
 
 A config names `out` (`work/core-runs/<name>`), `data`
-(`{"kind":"science","root":…,"manifest_sha256":…}` or
+(`{"kind":"science","root":…,"manifest_sha256":…}`, optionally with
+`"redeal_citations":true`, or
 `{"kind":"drill","root":"datasets/retained-text-assay"}`), `seed`, `rate`,
 `anchors`, `wall_seconds`, `checkpoint_every`, `eval_every`, `eval_cases` and
 `resume`. Write `out/STOP` (or press Ctrl+C in the owner) to end a run with a
 final checkpoint; set `resume` to continue it from the newest checkpoint that
-verifies. Design and invariants: [core path](src/causal/AGENTS.md); owner:
+verifies. Science runs also keep their lowest-dev-loss checkpoint in `out/best/`.
+Design and invariants: [core path](src/causal/AGENTS.md); owner:
 [scripts/AGENTS.md](scripts/AGENTS.md).
 
 For the final integrated checks after a batch of edits:
