@@ -153,6 +153,8 @@ fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
         ("eval_cases", json!(3), false),
         ("resume", json!(true), false),
         ("out", json!("work/core-runs/y"), false),
+        ("float_forward", json!(false), false),
+        ("float_forward", json!(true), true),
     ] {
         assert_eq!(identity(field, value)? != reference, moves, "{field}");
     }

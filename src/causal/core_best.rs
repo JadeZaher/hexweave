@@ -1,5 +1,5 @@
-//! Best-checkpoint selection for science runs: the lowest dev NLL is kept under `out/best` with an
-//! identity-stamped `selection.json`; see AGENTS.md §core.
+//! Best-checkpoint selection for runs whose evaluation reports `dev_nll_per_byte` (science and corpus):
+//! the lowest is kept under `out/best` with an identity-stamped `selection.json`; see AGENTS.md §core.
 
 use super::core_checkpoint;
 use super::resident::ResidentStore;

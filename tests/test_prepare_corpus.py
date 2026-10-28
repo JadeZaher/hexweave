@@ -23,7 +23,10 @@ class PrepareCorpusTest(unittest.TestCase):
         for name, entry in manifest["files"].items():
             data = (root / "corpus" / name).read_bytes()
             self.assertEqual(entry, {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-        self.assertEqual(json.loads((root / "corpus/manifest.json").read_text(encoding="utf-8")), manifest)
+        manifest_bytes = (root / "corpus/manifest.json").read_bytes()
+        self.assertEqual(json.loads(manifest_bytes), manifest)
+        self.assertNotIn(b"\r", manifest_bytes, "manifest bytes, and so its pin, must not depend on the platform")
+        self.assertRaises(SystemExit, prepare_corpus.prepare, source, root / "corpus", 2)
 
 
 if __name__ == "__main__":

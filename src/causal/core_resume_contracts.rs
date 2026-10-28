@@ -150,3 +150,33 @@ fn best_checkpoint_selection_survives_repeats_and_ignores_other_runs() -> Result
     std::fs::remove_dir_all(&out)?;
     Ok(())
 }
+
+/// A float-forward run's function lives in its latents, so resume from a checkpoint is bit exact.
+#[test]
+fn float_forward_resume_is_bit_exact() -> Result<()> {
+    let source = assay()?;
+    let drill = Drill::new(&source, 7)?;
+    let geometry = Geometry::candidate();
+    let out = fresh_temp("float")?;
+    let knobs = Knobs {
+        float_forward: true,
+        ..Knobs::core(0.003, 7)
+    };
+    let _float = tuning::scoped(knobs);
+    let mut state = State::with_cursor(geometry, 7, drill.cursor(0)?)?;
+    state.anchor_only = true;
+    let mut store = ResidentStore::new(geometry, 7)?;
+    train(&mut state, &mut store, &drill, 4)?;
+    let saved = core_checkpoint::save(&out, &state, &store, "identity")?;
+    train(&mut state, &mut store, &drill, 4)?;
+    let uninterrupted = fingerprint(&state, &store)?;
+    tuning::install(knobs);
+    let (mut resumed, mut store) = core_checkpoint::load(&saved, geometry, "identity")?;
+    train(&mut resumed, &mut store, &drill, 4)?;
+    assert!(
+        fingerprint(&resumed, &store)? == uninterrupted,
+        "float resume must be bit exact"
+    );
+    std::fs::remove_dir_all(&out)?;
+    Ok(())
+}

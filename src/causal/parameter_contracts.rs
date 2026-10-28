@@ -34,6 +34,11 @@ fn continuous_reference_checks_every_task_matrix_and_detached_policy_heads() -> 
                 .map(|i| ((3, i), &tile.matrices[i]))
                 .collect();
             super::tuning::ripple_latents(&keys)?;
+            assert!(
+                (0..tile.matrices[Q].len())
+                    .any(|i| tile.weight(Q, i).is_ok_and(|w| w.fract() != 0.0)),
+                "float mode did not engage"
+            );
         }
         check_reference()?;
     }

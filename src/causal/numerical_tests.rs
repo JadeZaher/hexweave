@@ -71,6 +71,10 @@ fn rms_adjoint_includes_epsilon_and_rejects_nonfinite() -> Result<()> {
 
 #[test]
 fn tile_conditional_adjoint_covers_current_state_and_every_prefix_position() -> Result<()> {
+    check_conditional_adjoint()
+}
+
+pub(super) fn check_conditional_adjoint() -> Result<()> {
     let geometry = Geometry::fixture();
     let shared = Shared::new(geometry, 37)?;
     let tile = Tile::new(geometry, 3, 37)?;
@@ -197,7 +201,7 @@ fn tied_embedding_gradient_sums_readout_and_repeated_prefix_uses_once() -> Resul
     Ok(())
 }
 
-fn check_tied_embedding() -> Result<()> {
+pub(super) fn check_tied_embedding() -> Result<()> {
     let geometry = Geometry::fixture();
     let shared = Shared::new(geometry, 41)?;
     let tile = Tile::new(geometry, 3, 41)?;
@@ -243,7 +247,7 @@ fn perturbed_loss(
     let d = shared.geometry.width;
     let mut memory = Vec::new();
     for (position, &byte) in bytes.iter().enumerate() {
-        let mut embedding = shared.embedding.column(usize::from(byte))?;
+        let mut embedding = shared.embedding_column(usize::from(byte))?;
         if index % VOCAB == usize::from(byte) {
             embedding[index / VOCAB] += delta;
         }

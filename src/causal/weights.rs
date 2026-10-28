@@ -150,7 +150,10 @@ impl Shared {
     pub fn embedding_column(&self, index: usize) -> Result<Vec<f32>> {
         let (rows, cols) = (self.embedding.rows(), self.embedding.cols());
         match tuning::with_float((TILES, 0), |w| -> Result<Vec<f32>> {
-            ensure!(index < cols, "column index out of bounds");
+            ensure!(
+                index < cols && w.len() == rows * cols,
+                "embedding latent shape"
+            );
             Ok((0..rows).map(|row| w[row * cols + index]).collect())
         }) {
             Some(column) => column,

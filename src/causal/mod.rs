@@ -71,6 +71,8 @@ mod data_tests;
 #[cfg(test)]
 mod execution_contracts;
 #[cfg(test)]
+mod float_contracts;
+#[cfg(test)]
 mod generation_contracts;
 #[cfg(test)]
 mod numerical_tests;

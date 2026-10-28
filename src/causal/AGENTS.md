@@ -62,8 +62,18 @@ instead of its trits (`weights.rs`: tile project/transpose, head row blocks,
 activation-curve offsets, tied-E column/project/transpose); latent Adam then
 trains a float model of the same architecture with exact gradients, and the
 trits are its post-hoc ternarization. Off, every call reaches the unchanged
-ternary kernels; the harness parity test and the gradient oracles (which add a
-float case with off-lattice latents against the f64 reference) pin both.
+ternary kernels; the harness parity test and the gradient oracles pin both: the
+parameter oracle, the input adjoint and the tied-E check (`float_contracts`)
+each rerun on off-lattice latents and fail if float mode does not engage, and
+float resume is bit exact. Reading the comparison: float latents start on the
+ternary lattice and are clipped to [-1, 1] (not a conventional float init);
+versions and `immutable::identity` still track trits, not the float function
+(history staleness stays bounded by age); evaluation passes zero history while
+training uses the history mean, so train and held-out losses differ by more
+than data. Corpus runs ignore `eval_cases`; best-checkpoint selection applies
+to them as to science runs. `prepare_corpus.py` writes LF manifests and refuses
+an existing corpus directory; the first TinyStories manifest (pinned by the
+2026-10-28 runs) predates that and has CRLF line endings.
 
 Data: `science` trains on a pinned QA Dataset's train split and evaluates the
 development split with `evaluation::evaluate` (teacher-forced NLL, coverage,

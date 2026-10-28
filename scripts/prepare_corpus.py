@@ -23,6 +23,8 @@ def split(all_stories: list[bytes], every: int) -> tuple[bytes, bytes]:
 
 
 def prepare(source: Path, out: Path, every: int) -> dict:
+    if (out / "manifest.json").exists():
+        raise SystemExit(f"{out} already holds a corpus; runs pin its manifest, so prepare a new directory")
     raw = source.read_bytes()
     train, heldout = split(stories(raw), every)
     out.mkdir(parents=True, exist_ok=True)
@@ -35,7 +37,7 @@ def prepare(source: Path, out: Path, every: int) -> dict:
         "source": {"path": str(source), "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()},
         "files": files,
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    (out / "manifest.json").write_bytes(json.dumps(manifest, indent=1).encode("utf-8"))
     return manifest
 
 
