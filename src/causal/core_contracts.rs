@@ -1,14 +1,14 @@
-//! Core-path contracts: harness parity, drill stream identity, resume and fallback; see AGENTS.md §core.
+//! Core-path contracts: harness parity, drill stream and run identity; see AGENTS.md §core.
 
 use super::assay_observation;
 use super::assay_source::{cursor, Source};
 use super::assay_state::{Progress, MANIFEST_SHA};
 use super::assay_update::Rule;
-use super::checkpoint_owner::Terminal;
-use super::core_checkpoint;
 use super::core_codec::encode_latents;
 use super::core_drill::{Drill, CYCLE};
+use super::core_train::identity_of;
 use super::execution::{self, TrainingSource};
+use super::generation::Terminal;
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
@@ -16,9 +16,10 @@ use super::state_codec::{encode_predictor, encode_shared, encode_tile};
 use super::tuning::{self, Knobs};
 use super::tuning_sources::Shuffled;
 use anyhow::{Context, Result};
+use serde_json::{json, Value};
 use std::path::Path;
 
-fn assay() -> Result<Source> {
+pub(super) fn assay() -> Result<Source> {
     Source::open(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("datasets/retained-text-assay"),
         MANIFEST_SHA,
@@ -26,7 +27,7 @@ fn assay() -> Result<Source> {
 }
 
 /// Everything training numerics touch: tiles, E, predictor, latents, history, baseline, loss.
-fn fingerprint(state: &State, store: &ResidentStore) -> Result<Vec<Vec<u8>>> {
+pub(super) fn fingerprint(state: &State, store: &ResidentStore) -> Result<Vec<Vec<u8>>> {
     let mut parts: Vec<Vec<u8>> = store.tiles.iter().map(encode_tile).collect::<Result<_>>()?;
     let (latents, calls) = tuning::export();
     parts.extend([
@@ -46,7 +47,16 @@ fn fingerprint(state: &State, store: &ResidentStore) -> Result<Vec<Vec<u8>>> {
     Ok(parts)
 }
 
-fn train<S: TrainingSource>(
+/// Per-process, per-test temporary directory, cleared of any leftover from an earlier run.
+pub(super) fn fresh_temp(test: &str) -> Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!("hexweave-core-{test}-{}", std::process::id()));
+    if path.exists() {
+        std::fs::remove_dir_all(&path)?;
+    }
+    Ok(path)
+}
+
+pub(super) fn train<S: TrainingSource>(
     state: &mut State,
     store: &mut ResidentStore,
     source: &S,
@@ -68,7 +78,7 @@ fn harness_fingerprint(source: &Source, geometry: Geometry, anchors: u64) -> Res
     let mut state = State::with_cursor(geometry, 7, cursor(0)?)?;
     state.assay = Some(Progress::new(Rule::Magnitude));
     let mut store = ResidentStore::new(geometry, 7)?;
-    let out = std::env::temp_dir().join(format!("hexweave-parity-{}", std::process::id()));
+    let out = fresh_temp("parity")?;
     std::fs::create_dir_all(&out)?;
     let mut never = || -> Result<Option<Terminal>> { Ok(None) };
     let observation = assay_observation::observe(&state, &mut store, source, &mut never)?;
@@ -102,6 +112,48 @@ fn core_drill_reproduces_validated_harness_numerics() -> Result<()> {
         "production drill diverges from the harness at fingerprint part {:?}",
         harness.iter().zip(&core).position(|(a, b)| a != b)
     );
+    assert_eq!(
+        state.numerical_clock()?,
+        4 * 12,
+        "anchor-only clock is 4x physical work"
+    );
+    Ok(())
+}
+
+/// The persisted run identity: a golden digest pins the formula, and only numerics fields move it.
+#[test]
+fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
+    let base = json!({"schema": 1, "out": "work/core-runs/x", "seed": 7, "rate": 0.003,
+        "data": {"kind": "drill", "root": "datasets/retained-text-assay"}, "anchors": 1,
+        "wall_seconds": 1, "checkpoint_every": 1, "eval_every": 1, "eval_cases": 1, "resume": false});
+    let identity = |field: &str, value: Value| -> Result<String> {
+        let mut config = base.clone();
+        config[field] = value;
+        identity_of(&serde_json::to_vec(&config)?)
+    };
+    let reference = identity("schema", json!(1))?;
+    assert_eq!(
+        reference, "a32ed6d967e77736ce19b3a0a738c4b33f75b4e22318f32d6a55b204972d98ff",
+        "identity formula changed: existing checkpoints will not resume"
+    );
+    for (field, value, moves) in [
+        ("seed", json!(8), true),
+        ("rate", json!(0.004), true),
+        (
+            "data",
+            json!({"kind": "drill", "root": "datasets/other"}),
+            true,
+        ),
+        ("anchors", json!(2), false),
+        ("wall_seconds", json!(9), false),
+        ("checkpoint_every", json!(5), false),
+        ("eval_every", json!(5), false),
+        ("eval_cases", json!(3), false),
+        ("resume", json!(true), false),
+        ("out", json!("work/core-runs/y"), false),
+    ] {
+        assert_eq!(identity(field, value)? != reference, moves, "{field}");
+    }
     Ok(())
 }
 
@@ -148,46 +200,5 @@ fn drill_stream_is_the_harness_stream_and_answers_need_the_key() -> Result<()> {
             "drill answer must be the asked key's value"
         );
     }
-    Ok(())
-}
-
-/// Resume is bit-exact; a corrupt newest checkpoint is set aside for the previous one, a stale
-/// partial is ignored, and another run identity is refused without touching anything.
-#[test]
-fn core_resume_is_bit_exact_and_falls_back_past_corruption() -> Result<()> {
-    let source = assay()?;
-    let drill = Drill::new(&source, 7)?;
-    let geometry = Geometry::candidate();
-    let out = std::env::temp_dir().join(format!("hexweave-core-{}", std::process::id()));
-    let _core = tuning::scoped(Knobs::core(0.003, 7));
-    let mut state = State::with_cursor(geometry, 7, drill.cursor(0)?)?;
-    state.anchor_only = true;
-    let mut store = ResidentStore::new(geometry, 7)?;
-    train(&mut state, &mut store, &drill, 5)?;
-    core_checkpoint::save(&out, &state, &store, "identity")?;
-    train(&mut state, &mut store, &drill, 5)?;
-    let newest = core_checkpoint::save(&out, &state, &store, "identity")?;
-    train(&mut state, &mut store, &drill, 5)?;
-    let uninterrupted = fingerprint(&state, &store)?;
-    let tiles = newest.join("tiles.bin");
-    let mut bytes = std::fs::read(&tiles)?;
-    bytes[100] ^= 1;
-    std::fs::write(&tiles, bytes)?;
-    std::fs::create_dir_all(out.join("checkpoints").join("a000000000015.partial"))?;
-    assert!(core_checkpoint::resume(&out, geometry, "other").is_err());
-    assert!(
-        newest.exists(),
-        "a foreign identity must not quarantine checkpoints"
-    );
-    tuning::install(Knobs::core(0.003, 7));
-    let (mut resumed, mut store, path) =
-        core_checkpoint::resume(&out, geometry, "identity")?.context("no checkpoint resumed")?;
-    assert!(path.ends_with("a000000000005") && !newest.exists());
-    train(&mut resumed, &mut store, &drill, 10)?;
-    assert!(
-        fingerprint(&resumed, &store)? == uninterrupted,
-        "fallback resume must be bit-exact"
-    );
-    std::fs::remove_dir_all(&out)?;
     Ok(())
 }

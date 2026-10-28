@@ -76,12 +76,19 @@ impl Config {
         Ok(())
     }
 
-    /// Numerics identity: resuming requires the same protocol, data, seed and rate.
+    /// Numerics identity: resuming requires the same protocol, geometry, data, seed, rate and knobs.
     fn identity(&self) -> Result<String> {
-        let value = json!({ "protocol": PROTOCOL, "geometry": "candidate", "data": &self.data,
-                            "seed": self.seed, "rate": self.rate });
+        let value = json!({ "protocol": PROTOCOL, "geometry": Geometry::candidate(),
+                            "data": &self.data, "seed": self.seed, "rate": self.rate,
+                            "numerics": Knobs::core(self.rate, self.seed) });
         Ok(digest(&serde_json::to_vec(&value)?))
     }
+}
+
+/// Run identity of a config document, for the identity contracts.
+#[cfg(test)]
+pub(super) fn identity_of(config: &[u8]) -> Result<String> {
+    serde_json::from_slice::<Config>(config)?.identity()
 }
 
 /// Run (or resume) one core training job from a JSON config.

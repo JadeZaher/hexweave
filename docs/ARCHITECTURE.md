@@ -2,9 +2,11 @@
 
 ## Executable boundary
 
-This document describes the original FP32 `smoke` reference. The separately named
-`pulse` protocol implements ternary-first local updates and task corrections;
-see [TERNARY-PULSE.md](TERNARY-PULSE.md). It does not replace these semantics.
+This document describes the original FP32 `smoke` reference. The ternary
+byte-level causal candidate and its core training path are mapped in
+`src/causal/AGENTS.md`; the archived `pulse` protocol is in
+[TERNARY-PULSE.md](../archive/docs/TERNARY-PULSE.md). Neither replaces these
+semantics.
 
 The seed separates a numerical CPU fixture from a larger-model plan. It uses
 Rust and Candle 0.11.0 automatic differentiation. No Python tensor environment,
@@ -29,10 +31,11 @@ flowchart TD
 ```
 
 The diagram is a learning loop, not a claim that all blocks train concurrently.
-All seven tiny tiles are resident in the FP32 fixture and original pulse protocol.
-Sparse execution is not sparse residency. The separate
-[disk-local text protocol](TEXT-PULSE.md) now loads one tile at a time, with
-shared state retained and OS file-cache behavior explicitly outside its contract.
+All seven tiny tiles are resident in the FP32 fixture, the archived pulse
+protocol and the core training path. Sparse execution is not sparse residency.
+The archived [disk-local text protocol](../archive/docs/TEXT-PULSE.md) loaded one
+tile at a time, with shared state retained and OS file-cache behavior explicitly
+outside its contract.
 
 ## Geometry and routing
 

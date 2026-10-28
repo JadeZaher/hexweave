@@ -24,7 +24,8 @@ class CoreOwnerPrepareTest(unittest.TestCase):
 
     def test_out_must_be_a_named_core_run(self):
         for out, accepted in [("work/core-runs/run", True), ("elsewhere/run", False),
-                              ("work/core-runs/../../x", False), ("work/core-runs", False)]:
+                              ("work/core-runs/../../x", False), ("work/core-runs", False),
+                              ("work/core-runs/..", False)]:
             with self.subTest(out=out):
                 if accepted:
                     self.assertEqual(core_owner.run_directory({"out": out}), self.out)
@@ -35,7 +36,7 @@ class CoreOwnerPrepareTest(unittest.TestCase):
         cases = [
             ("fresh over checkpoints", False, {"checkpoints/a000000000020/manifest.json": "{}"}),
             ("fresh over a pinned binary", False, {"bin/hexweave.exe": "older build"}),
-            ("resume past a user STOP", True, {"STOP": "operator pause", "bin/hexweave.exe": "older build"}),
+            ("resume past a user STOP", True, {"STOP": "operator pause"}),
         ]
         for index, (name, resume, files) in enumerate(cases):
             with self.subTest(name):
@@ -57,6 +58,30 @@ class CoreOwnerPrepareTest(unittest.TestCase):
         self.assertFalse((self.out / "STOP").exists() or (self.out / "report.json").exists())
         self.assertEqual(len(list(self.out.glob("STOP.archived-*"))), 1)
         self.assertEqual(len(list(self.out.glob("report.json.previous-*"))), 1)
+
+    def test_owner_error_stops_child_with_grace_and_keeps_the_earlier_reason(self):
+        class Child:
+            def __init__(self, exits):
+                self.exits = exits
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout):
+                if not self.exits:
+                    raise core_owner.subprocess.TimeoutExpired("hexweave", timeout)
+                return 0
+
+        for exits, settled in [(True, True), (False, False)]:
+            with self.subTest(exits=exits), mock.patch.object(core_owner, "GRACE_SECONDS", 0):
+                (self.out / "STOP").unlink(missing_ok=True)
+                self.assertEqual(core_owner.settle(Child(exits), self.out, "owner_error: OSError"), settled)
+                self.assertEqual(core_owner.stop_reason(self.out), "owner_error: OSError")
+        (self.out / "STOP").write_text("owner: owner_memory_stop\n", encoding="utf-8")
+        core_owner.settle(Child(True), self.out, "owner_error: OSError")
+        self.assertEqual(core_owner.stop_reason(self.out), "owner_memory_stop")
+        (self.out / "report.json").write_text('{"terminal": "stop', encoding="utf-8")
+        self.assertEqual(core_owner.read_report(self.out / "report.json"), {"unparseable": True})
 
 
 if __name__ == "__main__":

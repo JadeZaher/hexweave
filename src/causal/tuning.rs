@@ -2,11 +2,12 @@
 
 use crate::ternary::TernaryMatrix;
 use anyhow::{ensure, Result};
+use serde::Serialize;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 /// How a tuned rate moves trits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum Update {
     /// Stochastic rounding, probability min(rate*|g|/rms(g), 1); flip rate is loss-independent.
@@ -17,8 +18,9 @@ pub(super) enum Update {
     Latent,
 }
 
-/// Numerics profile; `PINNED` reproduces threshold-one numerics bit for bit.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Numerics profile; `PINNED` reproduces threshold-one numerics bit for bit. Serialized into
+/// the core run identity, so changing a field or `Knobs::core` makes old checkpoints unresumable.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub(super) struct Knobs {
     /// Tile-matrix rate; None keeps the threshold-one sign step.
     pub tile_rate: Option<f64>,

@@ -8,7 +8,7 @@ use super::state::State;
 use super::state_codec::{decode_predictor, decode_shared, encode_predictor, encode_shared};
 use super::storage_paths::digest;
 use super::tuning;
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -141,9 +141,62 @@ fn prune(out: &Path) {
 }
 
 fn manifest(path: &Path) -> Result<Manifest> {
-    Ok(serde_json::from_slice(&std::fs::read(
-        path.join("manifest.json"),
-    )?)?)
+    let bytes = retry(|| std::fs::read(path.join("manifest.json")))?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// A checkpoint of another run identity (protocol or config); resume aborts with nothing touched.
+#[derive(Debug)]
+struct ForeignIdentity(PathBuf);
+
+impl std::fmt::Display for ForeignIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let path = self.0.display();
+        write!(
+            formatter,
+            "{path} belongs to a different run identity; refusing to resume"
+        )
+    }
+}
+
+impl std::error::Error for ForeignIdentity {}
+
+fn check_identity(path: &Path, manifest: &Manifest, identity: &str) -> Result<()> {
+    if manifest.protocol != PROTOCOL || manifest.config_sha256 != identity {
+        return Err(ForeignIdentity(path.to_path_buf()).into());
+    }
+    Ok(())
+}
+
+/// Quarantinable: hash, decode/serde, missing expected file or name/anchor mismatch; never other I/O.
+pub(super) fn integrity_failure(error: &anyhow::Error) -> bool {
+    error.chain().all(|cause| {
+        cause.downcast_ref::<ForeignIdentity>().is_none()
+            && cause
+                .downcast_ref::<std::io::Error>()
+                .is_none_or(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+/// Quarantined checkpoint directories (`a<12 digits>.rejected-<pid>`).
+fn quarantined(out: &Path) -> Result<usize> {
+    let root = out.join("checkpoints");
+    if !root.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in std::fs::read_dir(&root)? {
+        let name = entry?.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('a')
+            && name
+                .get(13..)
+                .is_some_and(|tail| tail.starts_with(".rejected-"))
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// Verify every file hash, rebuild state and tiles, then install the latent state.
@@ -153,13 +206,10 @@ pub(super) fn load(
     identity: &str,
 ) -> Result<(State, ResidentStore)> {
     let manifest = manifest(path)?;
+    check_identity(path, &manifest, identity)?;
     ensure!(
-        manifest.schema == 1 && manifest.protocol == PROTOCOL,
-        "not a {PROTOCOL} checkpoint"
-    );
-    ensure!(
-        manifest.config_sha256 == identity,
-        "checkpoint belongs to a different run identity"
+        manifest.schema == 1,
+        "unsupported checkpoint manifest schema"
     );
     ensure!(
         path.file_name().and_then(|name| name.to_str())
@@ -167,7 +217,7 @@ pub(super) fn load(
         "checkpoint directory name does not match its anchors"
     );
     let read = |file: &str| -> Result<Vec<u8>> {
-        let bytes = std::fs::read(path.join(file))?;
+        let bytes = retry(|| std::fs::read(path.join(file)))?;
         ensure!(
             manifest.files.get(file) == Some(&digest(&bytes)),
             "checkpoint file {file} hash mismatch"
@@ -192,31 +242,38 @@ pub(super) fn load(
     Ok((state, store))
 }
 
-/// Newest checkpoint that verifies. A different run identity aborts untouched; a checkpoint
-/// that fails integrity is renamed `<name>.rejected` and the next-newest is tried.
+/// Newest checkpoint that verifies. Every readable manifest is identity-checked first, so a
+/// foreign run aborts with nothing touched; an integrity failure is renamed
+/// `<name>.rejected-<pid>` and the next-newest is tried; any other I/O error aborts in place.
+/// Ok(None) only when no checkpoint (complete or quarantined) exists.
 pub(super) fn resume(
     out: &Path,
     geometry: Geometry,
     identity: &str,
 ) -> Result<Option<(State, ResidentStore, PathBuf)>> {
     let mut candidates = checkpoints(out)?;
-    while let Some(path) = candidates.pop() {
-        if let Ok(found) = manifest(&path) {
-            if found.protocol != PROTOCOL || found.config_sha256 != identity {
-                bail!(
-                    "{} belongs to a different run identity; refusing to resume",
-                    path.display()
-                );
-            }
+    for path in &candidates {
+        if let Ok(found) = manifest(path) {
+            check_identity(path, &found, identity)?;
         }
+    }
+    while let Some(path) = candidates.pop() {
         match load(&path, geometry, identity) {
             Ok((state, store)) => return Ok(Some((state, store, path))),
-            Err(error) => {
+            Err(error) if integrity_failure(&error) => {
                 eprintln!("checkpoint {} rejected: {error:#}", path.display());
-                let rejected = path.with_extension(format!("rejected-{}", std::process::id()));
-                retry(|| std::fs::rename(&path, &rejected))?;
+                let target = path.with_extension(format!("rejected-{}", std::process::id()));
+                retry(|| std::fs::rename(&path, &target))?;
+            }
+            Err(error) => {
+                return Err(error.context(format!("{} left in place", path.display())));
             }
         }
     }
+    let count = quarantined(out)?;
+    ensure!(
+        count == 0,
+        "all {count} checkpoints failed verification; see .rejected-*; refusing to restart from anchor 0"
+    );
     Ok(None)
 }

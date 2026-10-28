@@ -83,7 +83,7 @@ impl Source {
         ] {
             let path = super::data_io::contained(&root, name)?;
             ensure!(
-                super::pinning::hash_file(&path, cap)? == sha,
+                super::child_io::hash_file(&path, cap)? == sha,
                 "assay file pin: {name}"
             );
         }

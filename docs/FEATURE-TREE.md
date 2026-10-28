@@ -2,8 +2,10 @@
 
 Updated 2026-10-25 America/Denver. The authorized assay launched once and ended
 failed before numerical admission: 3,078.4289 ms external wall, exit 1, zero
-opportunities or observations. Five arms never started. The study is spent;
-there is no active campaign, retry or authorized continuation.
+opportunities or observations. Five arms never started. The study is spent,
+with no retry or authorized continuation. 2026-10-27: its v3 owner chain is
+archived; current training is the core path, with runs tracked in
+[STATUS.md](STATUS.md).
 
 Open goal: useful source-grounded answers in environmental science, ecology,
 nature, agriculture, chemistry and biology, with a defensible training-time
@@ -116,8 +118,9 @@ and [terminal verification](../../nonmonotonic-training-lab/work/f-retained-assa
 
 Open quality branch
 
-- [ ] Decide separately whether to prepare a fresh admissible measurement.
-  The spent study and preserved terminal STOP permit no automatic restart.
+- [x] Decide separately whether to prepare a fresh admissible measurement:
+  the 2026-10-26 owner decision led to the core training path. The spent study
+  and preserved terminal STOP permit no automatic restart.
 - [ ] Obtain actual numerical comparison evidence; this failed admission
   supplies none. Any synthetic gate remains diagnostic only.
 - [ ] Establish a complete source-grounded science endpoint under the original

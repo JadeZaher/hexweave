@@ -7,20 +7,17 @@ pulse carries context between visits.
 
 Start with [the intention guide](docs/GUIDE.md), then the
 [architecture map](docs/ARCHITECTURE.md). This is a new experiment, not a migrated
-C/F checkpoint or a pretrained Granite competitor. The initial executable is a
-tiny CPU numerical fixture. Larger profiles are allocation-free planning inputs.
-The [ternary pulse protocol](docs/TERNARY-PULSE.md) is a separate bounded
-node-local experiment with real ternary storage and periodic task corrections.
-It is not yet the full attention model or a trained assistant.
+C/F checkpoint or a pretrained Granite competitor. The trainable model is the
+small ternary byte-level causal candidate (2,051,840 coefficients on seven hex
+tiles), trained by the core path below. The FP32 `smoke` fixture is a tiny
+numerical reference; the 81M/287M profiles are allocation-free planning inputs.
+It is not yet a trained assistant.
 
-The [three performance loops](docs/PERFORMANCE-LOOPS.md) add measured SIMD and
-allocation improvements. The [disk-local text experiment](docs/TEXT-PULSE.md)
-adds real next-byte examples and one loaded hex tile at a time, with shared
-weights counted separately. Neither enables full-size training.
-
-**Where the training pulse happens:** [the joint-pulse guide](docs/TRAINING-PULSE.md)
-maps the shared ternary context to transform gain, activation-curve output shift
-and routing bias, and shows where their training credit joins.
+The [three performance loops](docs/PERFORMANCE-LOOPS.md) record measured SIMD and
+allocation improvements. The earlier ternary-pulse, disk-local text and
+joint-pulse experiments, and the v3 owned-study chain, are archived and no longer
+build; [the archive guide](archive/README.md) lists what moved and how to restore
+it.
 
 ## First five minutes
 
@@ -35,12 +32,13 @@ From this directory in PowerShell:
 $env:CARGO_TARGET_DIR = Join-Path (Get-Location) 'work/target'
 cargo run --locked -- plan --config configs/local-287m.json
 cargo run --locked -- smoke --steps 4 --seed 7
-cargo run --locked -- pulse --steps 64 --seed 7 --mode pulse
+cargo run --locked -- causal plan
 ```
 
 The first command reports geometry and training-state arithmetic without loading
 the planned model. The second performs at most 16 tiny CPU updates and exits.
-The third runs the ternary fixture. These are software checks, not a training
+The third prints the causal candidate's configuration and payload ledger without
+allocating weights or opening data. These are software checks, not a training
 run; training the current candidate is the core path below. The 81M and 287M
 profiles stay planning-only.
 
@@ -104,10 +102,9 @@ and the 1 GiB device reserve. No full-size training fit has been measured.
 | How is size estimated? | [Configuration](src/config.rs) |
 | Where can a route go? | [Hex topology](src/topology.rs) |
 | How is fanout bounded? | [Metadata planner](src/planner.rs) |
-| What really trains? | [Numerical fixture](src/smoke.rs), [model](src/model/AGENTS.md) |
-| Where is ternary-first learning? | [Pulse guide](docs/TERNARY-PULSE.md), [pulse code map](src/pulse/AGENTS.md) |
-| Where is disk-local text training? | [Text guide](docs/TEXT-PULSE.md), [text code map](src/text/AGENTS.md) |
-| Where do tile-wide training signals join? | [Joint training pulse](docs/TRAINING-PULSE.md), [implementation](src/text/training_pulse.rs) |
+| What really trains? | [Core path](src/causal/AGENTS.md), [FP32 smoke fixture](src/smoke.rs), [model](src/model/AGENTS.md) |
+| Who owns a training run? | [Core training owner](scripts/AGENTS.md) |
+| Where did pulse, text and the v3 owner chain go? | [Archive guide](archive/README.md), [pulse guide](archive/docs/TERNARY-PULSE.md), [text guide](archive/docs/TEXT-PULSE.md) |
 | Which optimizations actually helped? | [Three measured loops](docs/PERFORMANCE-LOOPS.md) |
 | How will Granite be compared? | [Benchmark protocol](docs/BENCHMARKS.md) |
 | What is still missing? | [Status and gates](docs/STATUS.md) |

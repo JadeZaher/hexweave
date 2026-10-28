@@ -1,10 +1,9 @@
 //! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
-use super::checkpoint_owner::Terminal;
 use super::data::Dataset;
 use super::evaluation::{self, Limits, Loss};
-use super::generation;
+use super::generation::{self, Terminal};
 use super::resident::ResidentStore;
 use super::state::State;
 use super::tuning_measure;

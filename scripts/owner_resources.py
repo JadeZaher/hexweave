@@ -1,37 +1,24 @@
-"""Physical admission, sampled RSS guard and hard Windows job commit limits."""
+"""Host memory sampling, child working-set queries and the hard Windows Job commit cap."""
 
 import ctypes as c
 import os
 from ctypes import wintypes as w
 
-from scripts.text_win32 import ExtendedLimits, MemoryCounters, MemoryStatus, ThreadEntry, bind, kernel
+from scripts.owner_win32 import ExtendedLimits, MemoryCounters, MemoryStatus, ThreadEntry, bind, kernel
 
 
-GIB = 1024**3
 CHILD_LIMIT = 512 * 1024**2
-
-
-def required_cushion(total: int) -> int:
-    return max(2 * GIB, int(total * 0.15))
 
 
 def memory_status() -> dict:
     if os.name != "nt":
-        raise RuntimeError("text resource admission requires Windows")
+        raise RuntimeError("owner memory sampling requires Windows")
     state = MemoryStatus()
     state.length = c.sizeof(state)
     if not kernel().GlobalMemoryStatusEx(c.byref(state)):
         raise c.WinError(c.get_last_error())
     return {"total_physical_bytes": state.total_physical,
             "available_physical_bytes": state.available_physical}
-
-
-def admission() -> dict:
-    state = memory_status()
-    cushion = required_cushion(state["total_physical_bytes"])
-    if state["available_physical_bytes"] < cushion + CHILD_LIMIT:
-        raise MemoryError("physical admission needs adaptive host cushion plus 512 MiB")
-    return state | {"host_cushion_bytes": cushion, "child_commit_limit_bytes": CHILD_LIMIT}
 
 
 def process_memory(process) -> dict:

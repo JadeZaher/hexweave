@@ -1,5 +1,5 @@
 use super::assay_source::Row;
-use super::checkpoint_owner::Terminal;
+use super::generation::Terminal;
 use super::state::State;
 use super::store_api::TileStore;
 use anyhow::{ensure, Result};
@@ -104,6 +104,7 @@ pub(super) fn measure<S: TileStore, F: FnMut() -> Result<Option<Terminal>>>(
     Ok(case)
 }
 
+#[cfg(test)]
 impl Case {
     pub fn teacher_count(&self) -> u64 {
         self.content_nll.len() as u64 + u64::from(self.lf_nll.is_some())

@@ -6,6 +6,9 @@ took 3,078.4289 ms externally and executed zero training opportunities or
 observations. Five arms were never started. This study is spent; no retry or
 resume is authorized. The useful-assistant goal and its training ETA remain open.**
 
+2026-10-27: the v3 owner chain this handoff describes is archived; current
+training is the core path, tracked in [STATUS.md](STATUS.md).
+
 The goal is useful source-grounded answers in environmental science, ecology,
 nature, agriculture, chemistry and biology. The candidate remains 2,051,840
 ternary coefficients, width 128, FFN width 384, four heads, seven tiles, four
@@ -92,8 +95,9 @@ gates. The other five arms were never started.
 
 The old E4 STOP is preserved at the exact authorized archive destination in
 [the archival receipt](../../nonmonotonic-training-lab/work/f-retained-assay-drive/stop-archive.json).
-The new terminal study STOP remains at `work/causal/STOP`, SHA256
-`bc6466789b7abbc80301bb77784c465abe7ba7142b4ea3e0a9cf467d383b3c5d`.
+The new terminal study STOP was written to `work/causal/STOP`, SHA256
+`bc6466789b7abbc80301bb77784c465abe7ba7142b4ea3e0a9cf467d383b3c5d`; as of
+2026-10-27 that path holds a different, later STOP.
 No unused runtime is transferred and no retry or continuation follows.
 
 [Runtime outcome](../../nonmonotonic-training-lab/work/f-retained-assay-drive/RUNTIME-OUTCOME.md),

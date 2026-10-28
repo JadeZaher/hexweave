@@ -11,10 +11,6 @@ pub(super) struct Choice {
 pub(super) struct Update {
     pub pair_mse: Vec<f32>,
     pub transitions: usize,
-    #[cfg(test)]
-    pub signed_candidates: usize,
-    #[cfg(test)]
-    pub raw_pair_regressed: Vec<bool>,
 }
 
 pub(super) fn choose(weights: &[i8], features: &[&[f32]], targets: &[f32]) -> Result<Choice> {
@@ -125,14 +121,7 @@ pub(super) fn apply(current: &mut Predictor, pairs: &[(&[f32], &[f32])]) -> Resu
         version: current.version,
         matrix,
     };
-    guard(
-        current,
-        &inputs,
-        &targets,
-        proposal,
-        signed_candidates,
-        proposed_changes,
-    )
+    guard(current, &inputs, &targets, proposal, proposed_changes)
 }
 
 fn predictions(predictor: &Predictor, inputs: &[&[f32]]) -> Result<Vec<Vec<f32>>> {
@@ -156,7 +145,6 @@ fn guard(
     inputs: &[&[f32]],
     targets: &[Vec<f32>],
     proposal: Predictor,
-    _signed_candidates: usize,
     proposed_changes: usize,
 ) -> Result<Update> {
     let width = current.geometry.width;
@@ -208,16 +196,10 @@ fn guard(
         );
     }
     let pair_mse = metrics(&before, targets, width)?;
-    #[cfg(test)]
-    let raw_pair_regressed = regressions(&before, &actual, targets, width);
     *current = next;
     Ok(Update {
         pair_mse,
         transitions,
-        #[cfg(test)]
-        signed_candidates: _signed_candidates,
-        #[cfg(test)]
-        raw_pair_regressed,
     })
 }
 
@@ -272,26 +254,14 @@ fn metrics(before: &[Vec<f32>], targets: &[Vec<f32>], width: usize) -> Result<Ve
 }
 
 #[cfg(test)]
-fn regressions(
-    before: &[Vec<f32>],
-    actual: &[Vec<f32>],
-    targets: &[Vec<f32>],
-    width: usize,
-) -> Vec<bool> {
-    before
-        .iter()
-        .zip(actual)
-        .zip(targets)
-        .map(|((old, new), target)| {
-            let mse = |values: &[f32]| {
-                values
-                    .iter()
-                    .zip(target)
-                    .map(|(&p, &t)| (f64::from(p) - f64::from(t)).powi(2))
-                    .sum::<f64>()
-                    / width as f64
-            };
-            mse(new) > mse(old)
-        })
-        .collect()
+mod tests {
+    /// Three of four targets ask for +1, so the joint choice raises the trit (both moves counted).
+    #[test]
+    fn choice_aggregates_targets_across_pairs() -> anyhow::Result<()> {
+        let feature = [1.0];
+        let choice = super::choose(&[0], &[&feature[..]; 4], &[-1.0, 1.0, 1.0, 1.0])?;
+        assert_eq!(choice.movement, Some((0, 1)));
+        assert_eq!(choice.signed_candidates, 2);
+        Ok(())
+    }
 }

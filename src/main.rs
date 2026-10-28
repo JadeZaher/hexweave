@@ -3,22 +3,17 @@ use hexweave::config::Config;
 use std::path::Path;
 
 mod causal_cli;
-mod pulse_cli;
-mod text_cli;
 
-const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave pulse [--steps 32] [--seed 7] [--mode pulse|anchor-only] [--residents 1] [--anchor-interval 4]\nhexweave text --train <path> --valid <path> --work-dir <fresh work/path> [--steps 256] [--seed 7] [--mode pulse|anchor-only] [--anchor-interval 4] [--route-credit coupled|route-to-u-detached] [--profile fixture|t2-credit] [--credit-diagnostics off|on]\nhexweave train --config <core-run.json>   (core path: latent Adam, greedy routes, anchor-only; see src/causal/AGENTS.md)";
+const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave causal plan\nhexweave train --config <core-run.json>   (core path: latent Adam, greedy routes, anchor-only; see src/causal/AGENTS.md)";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = match args.first().map(String::as_str) {
         Some("plan") => plan(&args[1..])?,
         Some("smoke") => smoke(&args[1..])?,
-        Some("pulse") => pulse_cli::execute(&args[1..])?,
-        Some("text") => text_cli::execute(&args[1..])?,
         Some("causal") => causal_cli::execute(&args[1..])?,
         Some("help" | "--help" | "-h") | None => {
             println!("{USAGE}");
-            println!("hexweave causal plan\nhexweave causal train --owner-request <owned attempt/worker-request.json>");
             return Ok(());
         }
         Some("train") => train(&args[1..])?,

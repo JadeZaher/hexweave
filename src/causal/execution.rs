@@ -9,19 +9,11 @@ use super::tile_gradients::TileGradients;
 use crate::topology::Mesh;
 use anyhow::{ensure, Context, Result};
 
-#[cfg(test)]
-#[path = "anchor_only_fixture.rs"]
-pub(super) mod anchor_only_fixture;
-
 pub(super) trait TrainingSource {
     fn validate(&self, cursor: &Cursor) -> Result<()>;
     fn pending_prefix(&self, cursor: &Cursor) -> Result<Vec<u8>>;
     fn anchor_target(&self, cursor: &Cursor) -> Result<AnchorTarget>;
     fn advance_anchor(&self, cursor: &mut Cursor) -> Result<()>;
-    /// Full source re-verification at a checkpoint boundary.
-    fn verify_boundary(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 pub(super) struct Frame {

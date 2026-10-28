@@ -65,6 +65,12 @@ pub(super) fn decode_latents(bytes: &[u8]) -> Result<Latents> {
         );
         let (step, length) = (reader.u64()?, usize::try_from(reader.u64()?)?);
         let total = length.checked_mul(3).context("latent length overflow")?;
+        ensure!(
+            total
+                .checked_mul(4)
+                .is_some_and(|needed| needed <= reader.remaining()),
+            "latent payload shorter than its declared length"
+        );
         let mut values = Vec::with_capacity(total);
         for _ in 0..total {
             values.push(f32::from_le_bytes(reader.take(4)?.try_into()?));
@@ -104,5 +110,9 @@ impl Reader<'_> {
 
     fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into()?))
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.offset
     }
 }

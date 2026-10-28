@@ -1,4 +1,3 @@
-use super::checkpoint_owner::Terminal;
 use super::execution::{forward_path, Trace};
 use super::immutable;
 use super::state::{count, State};
@@ -6,6 +5,17 @@ use super::store_api::TileStore;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
+
+/// Terminal status a readout poll can report to interrupt evaluation or generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Terminal {
+    Completed,
+    UserStop,
+    ResourceStop,
+    BudgetStop,
+    Failed,
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

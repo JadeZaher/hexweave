@@ -281,7 +281,4 @@ impl TrainingSource for Dataset {
     fn advance_anchor(&self, cursor: &mut Cursor) -> Result<()> {
         cursor.advance_anchor(self)
     }
-    fn verify_boundary(&self) -> Result<()> {
-        self.verify_sources()
-    }
 }

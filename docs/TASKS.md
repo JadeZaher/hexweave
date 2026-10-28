@@ -5,6 +5,9 @@ and failed before worker creation: 3,078.4289 ms external wall, exit 1 and zero
 training/observation work. Five arms never started. The study is spent and no
 retry/resume is authorized. The useful-assistant goal remains incomplete.**
 
+2026-10-27: the v3 owner chain this study used is archived; current training is
+the core path, tracked in [STATUS.md](STATUS.md).
+
 The intended outcome remains a useful source-grounded assistant for environmental
 science, ecology, nature, agriculture, chemistry and biology, and an evidence-based
 training-time estimate. Candidate: 2,051,840 ternary coefficients, all trainable;
@@ -78,8 +81,9 @@ and [approved historical proposal](../../nonmonotonic-training-lab/work/f-retain
 
 </details>
 
-Remaining work requires a separate concrete decision on any fresh measurement;
-this completed authorization cannot be reused. Keep the terminal STOP and all
+Remaining work required a separate concrete decision on any fresh measurement;
+the 2026-10-26 owner decision led to the core training path. This completed
+authorization cannot be reused. Keep the terminal STOP and all
 resource protections intact. Actual learning, retention and useful science
 quality are still unmeasured by this assay, so a finite useful-assistant ETA
 cannot be inferred from its admission-failure duration.

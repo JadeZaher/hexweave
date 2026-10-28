@@ -1,4 +1,4 @@
-"""Win32 structures for bounded text execution; see scripts/AGENTS.md."""
+"""Win32 structures for the core owner's Job cap and memory sampling; see scripts/AGENTS.md."""
 
 import ctypes as c
 from ctypes import wintypes as w

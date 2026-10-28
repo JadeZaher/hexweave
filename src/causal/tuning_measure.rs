@@ -2,8 +2,8 @@
 
 use super::assay_measure::measure;
 use super::assay_source::{Row, Source};
-use super::checkpoint_owner::Terminal;
 use super::execution::forward_path;
+use super::generation::Terminal;
 use super::geometry::VISITS;
 use super::state::State;
 use super::store_api::TileStore;

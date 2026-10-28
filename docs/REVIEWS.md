@@ -13,7 +13,8 @@ was rejected rather than shipped; original update semantics remain.
 Independent verification read all validation logs (58 Rust / 38 Python tests,
 zero failures), the six final numerical-parity comparisons, both native text
 receipts/events and the final empty Hexweave process inventory. See
-[performance loops](PERFORMANCE-LOOPS.md) and [text results](TEXT-RESULTS.md).
+[performance loops](PERFORMANCE-LOOPS.md) and the archived
+[text results](../archive/docs/TEXT-RESULTS.md).
 Approval covers bounded fixtures only, not full-size admission or production
 checkpoint/resume. Both text arms worsened held-out loss; no efficient-learning
 or time-to-quality claim was approved.

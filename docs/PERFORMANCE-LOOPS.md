@@ -22,7 +22,8 @@ Every loop's six receipts matched the original in **every non-timing field**.
 Those historical receipts still contain the old scalar-only execution description.
 The final reporter corrects that description; future comparisons exclude exactly
 `seconds` and `arithmetic.execution`, never losses, routes, counts or state bounds.
-The harness is [speed_loop.py](../scripts/speed_loop.py). Runs were sequential,
+The harness is the archived [speed_loop.py](../archive/scripts/speed_loop.py),
+which timed the archived `pulse` command. Runs were sequential,
 not randomized/interleaved A/B; thermal/background variation remains possible.
 
 | Version | Pulse median across three case medians | Anchor-only median | Decision |
@@ -75,7 +76,7 @@ Source staging and frozen binaries remain in the parent's ignored workspace:
 `loop3-retained.json`. Every receipt identifies its executable SHA256.
 No Git history, model weights or environment was migrated between projects.
 
-The [disk-local text path](TEXT-PULSE.md) is a separate protocol, not relabeled
+The archived [disk-local text path](../archive/docs/TEXT-PULSE.md) is a separate protocol, not relabeled
 evidence for this speedup. It must count reloads, serialized copies, synchronous
 file commits, predictor work, anchors and evaluation. Safe next candidates are
 compact tile records and a bounded resident cache; either must preserve version

@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePath
 
-from scripts.text_resources import CHILD_LIMIT, Job, memory_status, process_memory, resume_suspended
+from scripts.owner_resources import CHILD_LIMIT, Job, memory_status, process_memory, resume_suspended
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOOR = 256 * 1024**2
@@ -83,7 +83,12 @@ def prepare(config: dict, out: Path, clear_stop: bool) -> Path:
             raise SystemExit(f"{stop} was not written by an owner; pass --clear-stop to archive it")
     if not binary.exists():
         binary.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / "work/target/release/hexweave.exe", binary)
+        partial = binary.with_name(f"{binary.name}.partial-{os.getpid()}")
+        try:
+            shutil.copy2(ROOT / "work/target/release/hexweave.exe", partial)
+            os.replace(partial, binary)
+        finally:
+            partial.unlink(missing_ok=True)
     if stop.exists():
         archive(stop, "archived")
     if (out / "report.json").exists():
@@ -94,6 +99,11 @@ def prepare(config: dict, out: Path, clear_stop: bool) -> Path:
 def request_stop(out: Path, reason: str) -> float:
     (out / "STOP").write_text(f"owner: {reason}\n", encoding="utf-8")
     return time.monotonic()
+
+
+def followed_by(earlier: str | None, later: str) -> str:
+    """Record an overriding reason without losing the stop that preceded it."""
+    return later if earlier is None else f"{earlier} then {later}"
 
 
 def supervise(process, out: Path, wall_seconds: int) -> tuple[str | None, int]:
@@ -109,17 +119,40 @@ def supervise(process, out: Path, wall_seconds: int) -> tuple[str | None, int]:
                 requested = request_stop(out, reason)
             if requested is not None and time.monotonic() - requested > GRACE_SECONDS:
                 process.kill()
-                return "owner_killed_after_grace", peak
+                return followed_by(reason, "owner_killed_after_grace"), peak
             time.sleep(1)
     except KeyboardInterrupt:
+        reason = followed_by(reason, "owner_interrupted")
         request_stop(out, "owner_interrupted")
         try:
             process.wait(timeout=GRACE_SECONDS)
-            return "owner_interrupted", peak
+            return reason, peak
         except subprocess.TimeoutExpired:
             process.kill()
-            return "owner_killed_after_grace", peak
+            return followed_by(reason, "owner_killed_after_grace"), peak
     return reason, peak
+
+
+def stop_reason(out: Path) -> str | None:
+    """Reason in an owner-written STOP (this launch's; prepare archived older ones), if present."""
+    try:
+        text = (out / "STOP").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text.removeprefix("owner: ") if text.startswith("owner:") else None
+
+
+def settle(process, out: Path, reason: str) -> bool:
+    """After an owner error, give a live child STOP and the grace period; False if it outlived the grace."""
+    if process.poll() is not None:
+        return True
+    if not (out / "STOP").exists():
+        request_stop(out, reason)
+    try:
+        process.wait(timeout=GRACE_SECONDS)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def final_peak(process, peak: int) -> int:
@@ -130,10 +163,20 @@ def final_peak(process, peak: int) -> int:
         return peak
 
 
+def read_report(path: Path) -> dict | None:
+    """This launch's report.json; an unreadable or malformed one is recorded, never fatal to the receipt."""
+    if not path.exists():
+        return None
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"unparseable": True}
+    return report if isinstance(report, dict) else {"unparseable": True}
+
+
 def finish(out: Path, run_stamp: str, process, reason: str | None, peak: int, started: float) -> None:
     """End receipt, embedding this launch's report (a stale one was archived before launch)."""
-    path = out / "report.json"
-    report = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    report = read_report(out / "report.json")
     returncode = process.returncode if process is not None else None
     fallback = (report or {}).get("terminal") or ("exited" if returncode == 0 else "failed")
     write(out / f"owner-end-{run_stamp}.json", {
@@ -162,10 +205,16 @@ def own(config_path: Path, config: dict, out: Path, binary: Path, host: dict) ->
                 | CREATE_NEW_PROCESS_GROUP)
             job.assign(process)
             resume_suspended(process)
-            reason, peak = supervise(process, out, int(config["wall_seconds"]))
+            try:
+                reason, peak = supervise(process, out, int(config["wall_seconds"]))
+            except Exception as error:
+                reason = followed_by(stop_reason(out), f"owner_error: {type(error).__name__}")
+                if not settle(process, out, reason):
+                    reason = followed_by(reason, "owner_killed_after_grace")
+                raise
             process.wait(timeout=60)
     except BaseException as error:
-        reason = reason or f"owner_error: {type(error).__name__}"
+        reason = reason or followed_by(stop_reason(out), f"owner_error: {type(error).__name__}")
         raise
     finally:
         if process is not None and process.poll() is None:

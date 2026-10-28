@@ -1,6 +1,5 @@
-use super::checkpoint_owner::Terminal;
 use super::evaluation::parse_answer;
-use super::generation::{generate, lowest_maximum, Reason};
+use super::generation::{generate, lowest_maximum, Reason, Terminal};
 use super::geometry::{Geometry, VOCAB};
 use super::state::State;
 use crate::ternary::TernaryMatrix;

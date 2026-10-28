@@ -13,12 +13,13 @@ They do not suppress warnings for the crate or the complete causal namespace.
   inspection convenience while execution checks generic sources separately.
 - Forward.latent remains an unused diagnostic return in the same temporary
   layout. Its field-level dead_code allowance applies in library and test builds.
-- Stop variant names preserve their serialized snake_case status names.
-  EvaluationReport intentionally retains its bounded inline layout rather than
-  adding a heap allocation solely for the enum-size lint.
-- Divisibility expressions use is_multiple_of. The anchor divisor is4; training
-  request validation requires positive checkpoint cadence. Prompt-only cadence0
-  never enters the training loop.
+- Items used only by tests (the assay observation publisher and its file helpers)
+  are `#[cfg(test)]`, not `allow(dead_code)`.
+- Divisibility expressions use is_multiple_of. The anchor divisor is 4; core run
+  validation requires positive checkpoint_every and eval_every.
+
+Archived entries (owner-chain Stop/EvaluationReport layouts) are in
+`../../archive/src/causal/AGENTS-history.md`.
 
 [Clippy's duplicate_mod implementation](https://github.com/rust-lang/rust-clippy/blob/rust-1.94.0/clippy_lints/src/duplicate_mod.rs)
 honors the lint level of each module declaration. These changes require the

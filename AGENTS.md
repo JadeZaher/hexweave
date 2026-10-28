@@ -20,14 +20,18 @@ with graceful resource-stop scaleback). Owner decision 2026-10-27: the core
 path (`hexweave train --config`, run under `scripts/core_owner.py`; see
 `src/causal/AGENTS.md` §Core path) is the production training mechanism for
 the current candidate, on public train/dev data only; private evaluation
-material stays unread. The 81M/287M profiles stay
+material stays unread. The 2026-10-26 mechanics (`work/causal/STOP`, plan
+schema, `HEXWEAVE_CAUSAL_ADMISSION`) belong to the v3 owner chain, now in
+`archive/`; core runs are admitted and stopped by `scripts/core_owner.py`
+(`out/STOP`). The 81M/287M profiles stay
 planning-only until independent numerical, resource, ownership and checkpoint
 reviews pass. Never silently download models, start servers or use cloud;
 background-worker and cleanup rules are unchanged.
 
 Keep four CPU threads, a 1 GiB device reserve and a 12 GiB owned-tree RSS ceiling
 as future admission requirements, not guarantees of the current fixture. There
-is no automatic resume, checkpoint migration or background worker in this seed.
+is no automatic resume (core runs resume only when a config says so), checkpoint
+migration or background worker in this seed.
 
 Use focused author/reviewer tasks. Apply all review fixes before one integrated
 test/lint sweep at the end. Review must be independent from authoring. Preserve

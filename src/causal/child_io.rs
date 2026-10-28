@@ -1,12 +1,20 @@
+//! Bounded regular-file reads and streamed SHA-256 pins; JSON publication is test-only.
+
+#[cfg(test)]
 use super::storage_paths;
 use anyhow::{ensure, Context, Result};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+use std::io::Read;
+#[cfg(test)]
+use std::io::{self, Write};
 use std::path::Path;
 
-pub(super) const REQUEST_CAP: u64 = 65_536;
 pub(super) const RESULT_CAP: u64 = 131_072;
 
+#[cfg(test)]
 pub(super) fn json(value: &impl serde::Serialize) -> Result<Vec<u8>> {
     struct Limited(Vec<u8>);
     impl Write for Limited {
@@ -68,6 +76,29 @@ pub(super) fn regular(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Streamed SHA-256 of a regular file bounded by `maximum`; fails if it changes while read.
+pub(super) fn hash_file(path: &Path, maximum: u64) -> Result<String> {
+    regular(path)?;
+    let mut file = File::open(path)?;
+    let expected = file.metadata()?.len();
+    ensure!(expected <= maximum, "pinned file exceeds bound");
+    let (mut buffer, mut length, mut hasher) = ([0u8; 8192], 0u64, Sha256::new());
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        length = length
+            .checked_add(count as u64)
+            .context("pinned file length overflow")?;
+        ensure!(length <= maximum, "pinned file grew beyond bound");
+        hasher.update(&buffer[..count]);
+    }
+    ensure!(length == expected, "pinned file length changed");
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
 pub(super) fn publish(attempt: &Path, name: &str, bytes: &[u8]) -> Result<String> {
     ensure!(
         !bytes.is_empty() && bytes.len() as u64 <= RESULT_CAP,

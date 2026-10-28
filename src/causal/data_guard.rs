@@ -1,8 +1,7 @@
-//! Amortized source verification: full hash once, then a metadata guard per span read; see AGENTS.md §ledger.
+//! Amortized source verification: full hash once, then a metadata guard per span read; see AGENTS.md §amortized.
 
 use super::data_contracts::Source;
 use super::data_io::{contained, source_span};
-use super::profile::{self, Bucket};
 use anyhow::{ensure, Context, Result};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -53,7 +52,7 @@ impl Verified {
         let path = contained(root, &source.snapshot_path)?;
         let stamp = self.stamps.borrow().get(&source.source_id).cloned();
         if let Some(stamp) = stamp.filter(|stamp| stamp.path == path) {
-            let read = profile::time(Bucket::SourceGuard, || guarded(&stamp, start, end))?;
+            let read = guarded(&stamp, start, end)?;
             if let Some(span) = read {
                 return Ok(span);
             }
@@ -61,7 +60,7 @@ impl Verified {
         self.verify(root, source, &path, start, end)
     }
 
-    /// Re-hash every previously verified source in full (checkpoint boundary).
+    /// Re-hash every previously verified source in full (`Dataset::open`, after its scan).
     pub fn verify_all(&self, root: &Path, sources: &BTreeMap<String, Source>) -> Result<()> {
         let ids: Vec<String> = self.stamps.borrow().keys().cloned().collect();
         for id in ids {
@@ -82,9 +81,7 @@ impl Verified {
     ) -> Result<Vec<u8>> {
         self.stamps.borrow_mut().remove(&source.source_id);
         let before = Stamp::new(path.to_path_buf(), &std::fs::metadata(path)?)?;
-        let span = profile::time(Bucket::SourceVerify, || {
-            source_span(root, source, start, end)
-        })?;
+        let span = source_span(root, source, start, end)?;
         let after = Stamp::new(path.to_path_buf(), &std::fs::metadata(path)?)?;
         ensure!(
             before == after && after.bytes == source.bytes,

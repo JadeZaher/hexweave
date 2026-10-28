@@ -1,129 +1,11 @@
-use super::checkpoint_owner::OwnerEnvelope;
+//! Bit-exact serialized continuation State (history, counters, cursor) for core checkpoints.
+
 use super::cursor::Cursor;
-use super::data::DataIdentity;
 use super::geometry::{Geometry, EVIDENCE_RULE, TILES};
 use super::history::{History, Record};
 use super::state::{Boundary, Counters, State};
-use super::storage::{Blob, IoCounters, TileRef};
-use super::storage_paths::{hash_valid, identifier};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
-
-pub(super) const STATE_CAP: u64 = 65_536;
-pub(super) const MANIFEST_CAP: u64 = 16_384;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Identity {
-    pub schema: u32,
-    pub protocol: String,
-    pub protocol_sha256: String,
-    pub config_sha256: String,
-    pub source_sha256: String,
-    pub runtime_sha256: String,
-    pub kernel: String,
-    pub geometry: Geometry,
-    pub data: DataIdentity,
-    pub evidence_rule: String,
-    pub rng: String,
-}
-
-impl Identity {
-    pub fn validate(&self) -> Result<()> {
-        self.geometry.validate()?;
-        ensure!(
-            self.schema == 1
-                && super::config::protocol_hash(&self.protocol)
-                    == Some(self.protocol_sha256.as_str())
-                && self.evidence_rule == EVIDENCE_RULE
-                && self.rng == "splitmix64-midpoint23-v1",
-            "checkpoint protocol mismatch"
-        );
-        for hash in [
-            &self.protocol_sha256,
-            &self.config_sha256,
-            &self.source_sha256,
-            &self.runtime_sha256,
-            &self.data.manifest_sha256,
-            &self.data.artifact_sha256,
-            &self.data.source_pin_manifest_sha256,
-        ] {
-            ensure!(hash_valid(hash), "invalid checkpoint identity hash");
-        }
-        ensure!(
-            matches!(self.kernel.as_str(), "scalar" | "avx2")
-                && self.kernel == crate::ternary::kernel_name()?,
-            "resolved kernel changed"
-        );
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CheckpointRef {
-    pub sequence: u64,
-    pub manifest_sha256: String,
-}
-
-impl CheckpointRef {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.sequence > 0 && hash_valid(&self.manifest_sha256),
-            "invalid checkpoint reference"
-        );
-        Ok(())
-    }
-    pub fn manifest_name(&self) -> String {
-        format!("manifest-{}.bin", self.manifest_sha256)
-    }
-    pub fn commit_name(&self) -> String {
-        format!("commit-{:020}-{}.json", self.sequence, self.manifest_sha256)
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Manifest {
-    pub schema: u32,
-    pub sequence: u64,
-    pub identity: Identity,
-    pub owner: OwnerEnvelope,
-    pub state: Blob,
-    pub shared: Blob,
-    pub predictor: Blob,
-    pub tiles: Vec<TileRef>,
-    pub io: IoCounters,
-}
-
-impl Manifest {
-    pub fn validate(&self, reference: &CheckpointRef) -> Result<()> {
-        reference.validate()?;
-        self.identity.validate()?;
-        ensure!(
-            self.schema == 1 && self.sequence == reference.sequence && self.tiles.len() == TILES,
-            "checkpoint manifest schema/sequence/tile count mismatch"
-        );
-        self.state.validate("state")?;
-        ensure!(
-            self.state.bytes <= STATE_CAP,
-            "checkpoint state exceeds bound"
-        );
-        self.shared.validate("shared")?;
-        self.predictor.validate("predictor")?;
-        for (id, tile) in self.tiles.iter().enumerate() {
-            ensure!(tile.id == id, "checkpoint tile ordering mismatch");
-            tile.blob.validate("tile")?;
-        }
-        ensure!(
-            self.io.peak_live_tiles <= 1
-                && self.io.current_disk_bytes <= self.io.peak_disk_bytes
-                && self.io.peak_disk_bytes <= self.owner.budget.disk_bytes_per_attempt,
-            "checkpoint storage accounting mismatch"
-        );
-        Ok(())
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,17 +161,4 @@ impl StateRecord {
         state.validate_boundary()?;
         Ok(state)
     }
-}
-
-pub(super) fn attempt_matches(directory: &std::path::Path, owner: &OwnerEnvelope) -> Result<()> {
-    ensure!(
-        identifier(&owner.attempt_id)
-            && directory
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                == Some(owner.attempt_id.as_str()),
-        "owner attempt does not match persistence directory"
-    );
-    Ok(())
 }

@@ -7,13 +7,11 @@ planner. The tensor implementation lives in `model/`, with its own directory
 notes; `smoke.rs` runs the bounded numerical fixture.
 
 `ternary.rs` supplies packed two-bit matrix values and signed i16 update
-evidence. `pulse_cli.rs` parses the bounded `pulse` command; `pulse/AGENTS.md`
-maps that separate protocol. `model/` remains the FP32 reference.
-`ternary/` contains checked scalar/AVX2 kernels and evidence contracts.
-`text_cli.rs` and `text/AGENTS.md` map the separate disk-local byte protocol.
-`text/training_pulse.rs` is the joint tile-pulse entry point: shared context and
-stacked gain/curve-shift/route heads. See `docs/TRAINING-PULSE.md` for intent and
-the ordered forward/credit stages; the correction predictor remains separate.
+evidence. `model/` remains the FP32 reference. `ternary/` contains checked
+scalar/AVX2 kernels and evidence contracts. `causal/` is the ternary byte-level
+candidate and its core training path (`hexweave train`, `causal/AGENTS.md`);
+`causal_cli.rs` parses `causal plan`. The earlier `pulse` and `text` protocols
+are archived under `../archive/src/` and no longer build.
 
 ## Ternary state
 
@@ -48,7 +46,8 @@ a physical-memory admission test nor a training-time forecast.
 Radius is capped before topology allocation. Other dimensions are bounded and
 arithmetic is checked. Configuration input is limited to 64 KiB and unknown
 fields are rejected. The planner never constructs tensors. The CLI cannot load
-these larger profiles into the numerical fixture or launch production training.
+these larger profiles into the numerical fixture or train them; `train` runs only
+the fixed causal candidate.
 
 ## Topology
 

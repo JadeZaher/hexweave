@@ -1,8 +1,7 @@
-use super::checkpoint_owner::Terminal;
 use super::data::{DataIdentity, Dataset};
 use super::data_contracts::{Split, TargetKind};
 use super::execution::forward_path;
-use super::generation::{self, Generation, Reason};
+use super::generation::{self, Generation, Reason, Terminal};
 use super::geometry::Geometry;
 use super::immutable;
 use super::state::{count, State};

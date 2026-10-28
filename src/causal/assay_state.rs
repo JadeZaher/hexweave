@@ -4,9 +4,8 @@ use super::storage_paths::hash_valid;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
+#[cfg(test)]
 pub(super) const PROTOCOL: &str = "causal-retained-text-assay-v1";
-pub(super) const CONTRACT_SHA: &str =
-    "e49b0bc82f13501c5ebf628d91b7383b58a19792af01d91081ac2aa9f676619d";
 pub(super) const MANIFEST_SHA: &str =
     "0a77b8fe038c8139314e7331417ced5aa853805ec26562680c3d770a01ade6db";
 pub(super) const ROWS_SHA: &str =
@@ -28,6 +27,7 @@ pub(super) struct ObservationRef {
     pub generated_readouts: u64,
 }
 
+#[cfg(test)]
 impl ObservationRef {
     pub fn name(&self) -> String {
         format!("assay-observation-{}.json", self.sha256)
@@ -51,6 +51,7 @@ pub(super) fn present<'de, D: Deserializer<'de>>(
 }
 
 impl Progress {
+    #[cfg(test)]
     pub fn new(rule: Rule) -> Self {
         Self {
             schema: 1,
@@ -125,10 +126,5 @@ impl Progress {
             "AO ledger contains local work"
         );
         super::assay_source::validate_cursor(&state.cursor)
-    }
-
-    pub fn complete(&self) -> bool {
-        self.observations.len() == PASSES.len()
-            && self.observations.iter().all(|entry| entry.complete)
     }
 }

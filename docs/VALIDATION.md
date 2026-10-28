@@ -1,8 +1,9 @@
 # Initial scaffold validation receipt
 
 This is the earlier FP32 scaffold sweep, preserved as historical evidence.
-The latest ternary-pulse integrated check passed **41 Rust and 22 Python tests**;
-see [PULSE-RESULTS.md](PULSE-RESULTS.md) for its logs and bounded observations.
+The later ternary-pulse integrated check passed **41 Rust and 22 Python tests**;
+see the archived [PULSE-RESULTS.md](../archive/docs/PULSE-RESULTS.md) for its logs
+and bounded observations.
 The counts and "final" wording below refer only to the original scaffold pass.
 
 Date: 2026-10-23. Final integrated sweep completed with process exit 0 in the
