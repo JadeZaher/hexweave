@@ -47,7 +47,16 @@ training fit has been measured.
   every evaluation. Dev generations loop and cite train source T06 although each
   dev prompt names its own D01-D06 SOURCE: the citations were memorized.
 - `work/core-runs/science-redeal-s7` and `-s17` (same settings plus
-  `redeal_citations`, 6-hour budget): running; no result is claimed here yet.
+  `redeal_citations`, 6-hour deadline, 1,045,861 and 930,466 anchors, peak
+  working set 93 MiB): best dev NLL 2.355 (100k anchors, epoch 15) and 2.366
+  (140k, epoch 21), both below the 2.430 without re-deal; teacher-forced dev
+  citation NLL fell to 2.402 and 2.499 (3.069 at best without re-deal) and kept
+  improving while total dev NLL overfit to ~3.1 by the deadline. Greedy dev
+  generations stayed degenerate: at most 1/24 valid JSON at any evaluation, no
+  exact answer or citation, and a `"citation":"` field in at most 2 of 18
+  answerable cases. Re-dealing removed citation memorization; a copy circuit
+  for the variable-offset citation did not form within ~1M anchors. Best states
+  are in each run's `out/best/`.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 
