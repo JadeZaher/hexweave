@@ -161,7 +161,7 @@ fn complete<S: TileStore, D: TrainingSource>(
     });
     let previous_visits = state.counters.visits;
     prune(state)?;
-    let loss = if state.assay.is_some() || opportunity.is_multiple_of(4) {
+    let loss = if state.anchors_only() || opportunity.is_multiple_of(4) {
         let history = state.history.mean(state.geometry)?;
         let trace = forward_path(
             store,

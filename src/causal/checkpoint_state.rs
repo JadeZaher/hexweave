@@ -160,6 +160,18 @@ pub(super) struct StateRecord {
         deserialize_with = "super::assay_state::present"
     )]
     pub assay: Option<super::assay_state::Progress>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub anchor_only: bool,
+}
+
+/// Record schema: 1 interleaved v3, 2 assay ledger, 3 core anchor-only; the two modes are exclusive.
+fn schema(assay: bool, anchor_only: bool) -> Result<u32> {
+    match (assay, anchor_only) {
+        (true, true) => anyhow::bail!("assay ledger and core anchor-only state are exclusive"),
+        (true, false) => Ok(2),
+        (false, true) => Ok(3),
+        (false, false) => Ok(1),
+    }
 }
 
 impl StateRecord {
@@ -169,7 +181,7 @@ impl StateRecord {
         counters.predictor_mse_sum = 0.0;
         counters.anchor_loss_sum = 0.0;
         Ok(Self {
-            schema: if state.assay.is_some() { 2 } else { 1 },
+            schema: schema(state.assay.is_some(), state.anchor_only)?,
             evidence_rule: EVIDENCE_RULE.into(),
             boundary: state.boundary,
             geometry: state.geometry,
@@ -197,6 +209,7 @@ impl StateRecord {
             predictor_mse_bits: state.counters.predictor_mse_sum.to_bits(),
             anchor_loss_bits: state.counters.anchor_loss_sum.to_bits(),
             assay: state.assay.clone(),
+            anchor_only: state.anchor_only,
         })
     }
 
@@ -206,7 +219,7 @@ impl StateRecord {
         predictor: super::predictor::Predictor,
     ) -> Result<State> {
         ensure!(
-            self.schema == (if self.assay.is_some() { 2 } else { 1 })
+            self.schema == schema(self.assay.is_some(), self.anchor_only)?
                 && self.evidence_rule == EVIDENCE_RULE
                 && self.boundary == Boundary::Ready,
             "checkpoint does not encode complete canonical Ready state"
@@ -261,6 +274,7 @@ impl StateRecord {
             counters,
             boundary: Boundary::Ready,
             assay: self.assay,
+            anchor_only: self.anchor_only,
         };
         state.validate_boundary()?;
         Ok(state)

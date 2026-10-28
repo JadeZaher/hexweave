@@ -1,5 +1,28 @@
 # Validation utilities
 
+## Core training owner
+
+`python -B -m scripts.core_owner --config <core-run.json>` owns one
+`hexweave train` run (see `src/causal/AGENTS.md` §core path). Before any side
+effect it requires `out` = `work/core-runs/<name>` and 768 MiB available (256 MiB
+floor plus the 512 MiB child commit); it then takes an exclusive
+`out/OWNER.lock` (a crashed owner's lock is removed by hand after inspection).
+A fresh launch refuses existing checkpoints or an already pinned binary and
+copies the current release build into `out/bin/`; a resume keeps the pinned
+copy. A leftover `out/STOP` is archived only if an owner wrote it (`owner:`
+prefix) or `--clear-stop` is given; a previous `report.json` is archived so the
+end receipt can only embed this launch's report.
+
+The child starts suspended in its own process group, joins a one-process,
+kill-on-close Job with the 512 MiB commit cap, then resumes. Each second the
+owner samples the child's peak working set and host memory; ten consecutive
+samples below the floor, or the wall budget plus 30 minutes, write `out/STOP`
+so the trainer checkpoints and exits, and the owner kills it only after a
+180-second grace. Ctrl+C in the owner does the same (STOP, grace, then kill);
+never kill the trainer directly. Start and end receipts record the config and
+binary SHA-256s, git HEAD and dirty state, host memory, exit, reason, peak
+working set and the report; the end receipt is written on every exit path.
+
 ## Conserved retained-text study
 
 `causal_assay_prepare` writes a pinned declaration, six requests and a plan. It

@@ -6,7 +6,7 @@ mod causal_cli;
 mod pulse_cli;
 mod text_cli;
 
-const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave pulse [--steps 32] [--seed 7] [--mode pulse|anchor-only] [--residents 1] [--anchor-interval 4]\nhexweave text --train <path> --valid <path> --work-dir <fresh work/path> [--steps 256] [--seed 7] [--mode pulse|anchor-only] [--anchor-interval 4] [--route-credit coupled|route-to-u-detached] [--profile fixture|t2-credit] [--credit-diagnostics off|on]\nFull training is intentionally unavailable until admission and durability gates pass.";
+const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave pulse [--steps 32] [--seed 7] [--mode pulse|anchor-only] [--residents 1] [--anchor-interval 4]\nhexweave text --train <path> --valid <path> --work-dir <fresh work/path> [--steps 256] [--seed 7] [--mode pulse|anchor-only] [--anchor-interval 4] [--route-credit coupled|route-to-u-detached] [--profile fixture|t2-credit] [--credit-diagnostics off|on]\nhexweave train --config <core-run.json>   (core path: latent Adam, greedy routes, anchor-only; see src/causal/AGENTS.md)";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -21,11 +21,18 @@ fn main() -> Result<()> {
             println!("hexweave causal plan\nhexweave causal train --owner-request <owned attempt/worker-request.json>");
             return Ok(());
         }
-        Some("train") => bail!("full training is not implemented or admitted; use plan, not a run"),
+        Some("train") => train(&args[1..])?,
         Some(command) => bail!("unknown command {command:?}\n{USAGE}"),
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn train(args: &[String]) -> Result<serde_json::Value> {
+    if args.len() != 2 || args[0] != "--config" {
+        bail!("expected train --config <path>");
+    }
+    hexweave::causal::train(Path::new(&args[1]))
 }
 
 fn plan(args: &[String]) -> Result<serde_json::Value> {

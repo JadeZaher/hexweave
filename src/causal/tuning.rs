@@ -1,9 +1,11 @@
-//! Test-only optimizer knobs; `cfg(not(test))` builds always run `Knobs::PINNED`. See AGENTS.md §tuning.
+//! Numerics profile: pinned threshold-one (v3/assay) or the core latent path; see AGENTS.md §core.
 
 use crate::ternary::TernaryMatrix;
 use anyhow::{ensure, Result};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
-/// How a tuned rate moves trits; only test builds construct non-default variants.
+/// How a tuned rate moves trits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum Update {
@@ -15,14 +17,14 @@ pub(super) enum Update {
     Latent,
 }
 
-/// Exploration overrides; `PINNED` reproduces threshold-one numerics bit for bit.
+/// Numerics profile; `PINNED` reproduces threshold-one numerics bit for bit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Knobs {
     /// Tile-matrix rate; None keeps the threshold-one sign step.
     pub tile_rate: Option<f64>,
     /// Router-matrix override of `tile_rate`.
     pub router_rate: Option<f64>,
-    /// Tied-E rate; None keeps the assay rule.
+    /// Tied-E rate; None keeps the pinned rule.
     pub embed_rate: Option<f64>,
     pub update: Update,
     /// Readout logit divisor; exactly 1 keeps pinned numerics.
@@ -55,6 +57,18 @@ impl Knobs {
         seed: 0,
     };
 
+    /// Core path (causal-latent-v1): latent Adam on tiles and E, greedy routes, pinned forward.
+    pub fn core(rate: f64, seed: u64) -> Self {
+        Self {
+            tile_rate: Some(rate),
+            embed_rate: Some(rate),
+            update: Update::Latent,
+            greedy_routes: true,
+            seed,
+            ..Self::PINNED
+        }
+    }
+
     /// Non-default numerics the gradient oracles also check (temperature, scale, mix).
     #[cfg(test)]
     pub const ORACLE: Self = Self {
@@ -75,33 +89,26 @@ impl Knobs {
 }
 
 /// Latent weights and interleaved Adam moments for one ternary matrix.
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Latent {
     pub weights: Vec<f32>,
     pub moments: Vec<f32>,
     pub step: u64,
 }
 
-#[cfg(test)]
 thread_local! {
-    static KNOBS: std::cell::Cell<Knobs> = const { std::cell::Cell::new(Knobs::PINNED) };
-    static CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static LATENTS: std::cell::RefCell<std::collections::HashMap<(usize, usize), Latent>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static KNOBS: Cell<Knobs> = const { Cell::new(Knobs::PINNED) };
+    static CALLS: Cell<u64> = const { Cell::new(0) };
+    static LATENTS: RefCell<BTreeMap<(usize, usize), Latent>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-#[cfg(not(test))]
+/// The profile for this thread; pinned unless `install` was called.
 pub(super) fn current() -> Knobs {
-    Knobs::PINNED
+    KNOBS.with(Cell::get)
 }
 
-#[cfg(test)]
-pub(super) fn current() -> Knobs {
-    KNOBS.with(std::cell::Cell::get)
-}
-
-/// Install knobs for this thread; restart draw streams and discard latent state.
-#[cfg(test)]
-pub(super) fn set(knobs: Knobs) {
+/// Install a profile for this thread; restart draw streams and discard latent state.
+pub(super) fn install(knobs: Knobs) {
     KNOBS.with(|cell| cell.set(knobs));
     CALLS.with(|cell| cell.set(0));
     LATENTS.with(|cell| cell.borrow_mut().clear());
@@ -114,14 +121,14 @@ pub(super) struct Scoped;
 #[cfg(test)]
 impl Drop for Scoped {
     fn drop(&mut self) {
-        set(Knobs::PINNED);
+        install(Knobs::PINNED);
     }
 }
 
 /// Install knobs until the returned guard drops.
 #[cfg(test)]
 pub(super) fn scoped(knobs: Knobs) -> Scoped {
-    set(knobs);
+    install(knobs);
     Scoped
 }
 
@@ -131,7 +138,6 @@ pub(super) fn anneal(knobs: Knobs) {
     KNOBS.with(|cell| cell.set(knobs));
 }
 
-#[cfg(test)]
 fn next_call() -> u64 {
     CALLS.with(|cell| {
         let call = cell.get();
@@ -140,28 +146,25 @@ fn next_call() -> u64 {
     })
 }
 
-#[cfg(not(test))]
-fn next_call() -> u64 {
-    0
+/// Latent states keyed (owner, matrix); owner `TILES` is the tied E.
+pub(super) type Latents = Vec<((usize, usize), Latent)>;
+
+/// Copy of the latent state and draw counter, for checkpoints.
+pub(super) fn export() -> (Latents, u64) {
+    let latents = LATENTS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .map(|(key, latent)| (*key, latent.clone()))
+            .collect()
+    });
+    (latents, CALLS.with(Cell::get))
 }
 
-#[cfg(test)]
-fn take_latent(key: (usize, usize)) -> Option<Latent> {
-    LATENTS.with(|cell| cell.borrow_mut().remove(&key))
+/// Replace the latent state and draw counter from a checkpoint.
+pub(super) fn import(latents: Latents, calls: u64) {
+    LATENTS.with(|cell| *cell.borrow_mut() = latents.into_iter().collect());
+    CALLS.with(|cell| cell.set(calls));
 }
-
-#[cfg(not(test))]
-fn take_latent(_key: (usize, usize)) -> Option<Latent> {
-    None
-}
-
-#[cfg(test)]
-fn put_latent(key: (usize, usize), latent: Latent) {
-    LATENTS.with(|cell| cell.borrow_mut().insert(key, latent));
-}
-
-#[cfg(not(test))]
-fn put_latent(_key: (usize, usize), _latent: Latent) {}
 
 /// One tuned update of `matrix` keyed by (owner, matrix index); returns trit transitions.
 pub(super) fn update(
@@ -179,7 +182,8 @@ pub(super) fn update(
         }
         Update::Raw => matrix.apply_stochastic(gradient, rate, stream()),
         Update::Latent => {
-            let mut latent = match take_latent(key) {
+            let existing = LATENTS.with(|cell| cell.borrow_mut().remove(&key));
+            let mut latent = match existing {
                 Some(latent) => latent,
                 None => Latent {
                     weights: (0..matrix.len())
@@ -197,7 +201,7 @@ pub(super) fn update(
                 rate,
                 latent.step,
             );
-            put_latent(key, latent);
+            LATENTS.with(|cell| cell.borrow_mut().insert(key, latent));
             changed
         }
     }

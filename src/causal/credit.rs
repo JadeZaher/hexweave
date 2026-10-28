@@ -86,6 +86,10 @@ pub(super) fn anchor<S: TileStore>(
         let transitions = usize::try_from(metrics.transitions)?;
         assay.embedding.add(&metrics)?;
         transitions
+    } else if let Some(moved) =
+        super::assay_update::tuned(&mut state.shared, &credit.embedding_gradient)?
+    {
+        usize::try_from(moved)?
     } else {
         state.shared.apply(&credit.embedding_gradient)?
     };

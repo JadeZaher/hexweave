@@ -1,5 +1,61 @@
 # Causal-prefix-v3 numerical modules
 
+## Core path: causal-latent-v1 (production training)
+
+`hexweave train --config <json>` (`core_train`) is the production training path,
+run under `scripts/core_owner.py`. It keeps the v3 forward model unchanged and
+changes how it learns, per the 2026-10-27 tuning loop (`§tuning` below):
+latent-weight Adam on every tile matrix and tied E (`tuning::Knobs::core`,
+`TernaryMatrix::apply_latent`; BinaryConnect arXiv:1511.00363, Adam
+arXiv:1412.6980, TWN threshold arXiv:1605.04711), greedy (eval-matched) routes,
+and an anchor-only schedule (`State.anchor_only`, StateRecord schema 3, never
+combined with the assay ledger) that reuses the assay clock arithmetic
+(numerical clock = 4 x physical, history on multiples of 4) without the ledger.
+
+The numerics profile is a thread-local set only by `tuning::install`, which only
+`core_train::run` calls in production (`drive` re-checks it equals
+`Knobs::core(rate, seed)`); v3, assay, text and pulse runners never install it
+and stay pinned. All seven tiles and their latent state stay resident
+(`resident::ResidentStore`, ~25 MB of latent f32 + Adam moments for 2.05M
+coefficients); there is no per-update persistence. History corrections still
+feed the forward pass; the predictor is trained and checkpointed (counter
+invariants require it) but nothing reads it under anchor-only.
+
+Checkpoints (`core_checkpoint`, payload codecs in `core_codec`):
+`checkpoints/a<12-digit anchors>/` holds state, E, predictor, tiles, latents
+and a SHA-256 manifest. Files are fsynced in `<name>.partial`, which is then
+renamed; rename and removals retry Windows sharing errors (os 5/32, e.g. a
+scanner holding a just-closed file) with backoff, and pruning to the newest
+three is never fatal. Resume walks newest first: a checkpoint of another run
+identity (protocol, data, seed, rate) aborts with nothing touched; one that
+fails integrity is renamed `.rejected-<pid>` and the next is tried; restore
+verifies every hash, the directory name, then reinstalls latents and the draw
+counter, so resume is bit exact. `resume: true` with no checkpoint starts
+fresh; a fresh run refuses existing checkpoints. Changing `anchors` or
+`wall_seconds` extends a run. `out` must be `work/core-runs/<name>`.
+
+Data: `science` trains on a pinned QA Dataset's train split and evaluates the
+development split with `evaluation::evaluate` (teacher-forced NLL, coverage,
+greedy JSON answers, exact answer/citation) plus four train-row samples.
+`drill` (`core_drill`, v2) replays the assay schedule in 1,600-anchor cycles
+(16 foundation passes, then 4 retention-stress passes) and re-deals values and
+the asked key with `tuning_sources::redeal` under the harness's per-cycle salt,
+so its stream is exactly the harness `Shuffled` stream that learned retrieval;
+it is evaluated with the assay rows, key-swap and attention probes. A v1 drill
+that interleaved all 32 templates per 160 anchors stayed key-blind for 96,000
+anchors (0/32 swap flips; `work/core-runs/drill-acceptance`), while the three
+harness seeds broke out at 28-42k, so the curriculum is part of the recipe.
+
+`core_contracts` pins the transfer: 12 anchors of the production drill under
+anchor-only match `Shuffled` under the assay ledger bit for bit (tiles, E,
+predictor, latents, history, baseline, loss); the drill stream equals
+`Shuffled` across cycle boundaries; resume past a corrupt newest checkpoint is
+bit exact. Beyond the first cycle runs agree in distribution, not bits: the
+harness rebuilds State (empty history) every 1,600 anchors and the core path
+does not. Logs go to `out/log.jsonl` (lines after the last checkpoint repeat
+after a resume), the summary to `out/report.json`. End a run with `out/STOP`
+(final checkpoint) or the wall deadline, not by killing the trainer.
+
 ## Separate owned retained-text assay
 
 The closed experimental protocol and its exact byte-level update definition are
@@ -1098,14 +1154,14 @@ thread-local, single-threaded; per-call cost not separately measured); only `sna
 part of the worker result schema. `persistence_profile.rs` is the ignored
 bounded harness that prints them over real steps with a real DiskStore.
 
-## Exploratory tuning knobs (test-only)
+## Numerics profile and the tuning harness
 
-`tuning.rs` holds optimizer overrides for exploration; the in-memory harness
-`tuning_harness.rs` (ignored test `tuning_run`, driven by `HEXWEAVE_TUNE_*`
-variables and `work/tuning/tune.py`) runs the retained-text assay with them.
-`cfg(not(test))` builds (every production binary) compile `current()` to the
-constant `Knobs::PINNED`; test builds, including the `cargo test --release`
-harness binary, read a thread-local that `scoped()` restores on drop. Pinned
+`tuning.rs` holds the numerics profile: `Knobs::PINNED` (v3/assay numerics) and
+`Knobs::core` (`§Core path`). Every build reads a thread-local; production sets
+it only through `core_train::run` -> `install`, so other runners stay pinned.
+The in-memory harness `tuning_harness.rs` (ignored test `tuning_run`, driven by
+`HEXWEAVE_TUNE_*` variables and `work/tuning/tune.py`) explores further knobs
+under the test-only `scoped()` guard, which restores pinned knobs on drop. Pinned
 defaults are IEEE-exact (divide by 1.0, multiply by 1.0, the same 0.25), and the
 harness at pinned knobs reproduces production study arm 0's eight observation
 files with identical SHA-256 names (`work/tuning/parity.py`). The continuous

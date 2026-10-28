@@ -30,6 +30,8 @@ pub(super) struct State {
     pub counters: Counters,
     pub boundary: Boundary,
     pub assay: Option<super::assay_state::Progress>,
+    /// Core-path anchor-only schedule without the assay ledger.
+    pub anchor_only: bool,
 }
 
 pub(super) fn count(value: &mut u64, amount: usize) -> Result<()> {
@@ -66,11 +68,17 @@ impl State {
             counters: Counters::default(),
             boundary: Boundary::Ready,
             assay: None,
+            anchor_only: false,
         })
     }
 
+    /// Every opportunity is an anchor (assay ledger or core path); the clock then advances by 4.
+    pub fn anchors_only(&self) -> bool {
+        self.assay.is_some() || self.anchor_only
+    }
+
     pub fn numerical_clock(&self) -> Result<u64> {
-        if self.assay.is_some() {
+        if self.anchors_only() {
             self.global_opportunity
                 .checked_mul(4)
                 .context("assay numerical clock overflow")
@@ -103,7 +111,7 @@ impl State {
         self.counters.validate_schedule(
             self.global_opportunity,
             self.geometry,
-            self.assay.is_some(),
+            self.anchors_only(),
         )?;
         if let Some(assay) = &self.assay {
             assay.validate(self)?;

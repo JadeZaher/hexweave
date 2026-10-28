@@ -8,19 +8,32 @@ fn invoke(args: &[&str]) -> Output {
 }
 
 #[test]
-fn production_training_and_unknown_commands_are_rejected() {
+fn train_rejects_bad_invocations_and_configs_before_training() {
+    let config = std::env::temp_dir().join(format!("hexweave-cli-{}.json", std::process::id()));
+    std::fs::write(
+        &config,
+        r#"{"schema":1,"out":"work/core-runs/../../elsewhere","data":{"kind":"drill","root":"datasets/retained-text-assay"},
+            "seed":7,"rate":0.003,"anchors":1,"wall_seconds":60,"checkpoint_every":1,"eval_every":1,
+            "eval_cases":1,"resume":false}"#,
+    )
+    .expect("temporary config");
+    let path = config.to_string_lossy().into_owned();
     for (args, expected) in [
+        (vec!["train"], "expected train --config"),
+        (vec!["train", "--config"], "expected train --config"),
         (
-            vec!["train"],
-            "full training is not implemented or admitted",
+            vec!["train", "--config", path.as_str()],
+            "out must be work/core-runs/<name>",
         ),
         (vec!["resume"], "unknown command"),
         (vec!["surprise"], "unknown command"),
     ] {
         let output = invoke(&args);
-        assert!(!output.status.success());
+        assert!(!output.status.success(), "accepted {args:?}");
         assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
     }
+    assert!(!std::path::Path::new("elsewhere").exists());
+    std::fs::remove_file(config).expect("remove temporary config");
 }
 
 #[test]
@@ -59,8 +72,7 @@ fn plan_requires_exact_profile_option() {
 fn help_returns_success_without_training() {
     let output = invoke(&["--help"]);
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout)
-        .contains("Full training is intentionally unavailable"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("hexweave train --config"));
 }
 
 #[test]

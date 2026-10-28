@@ -40,8 +40,31 @@ cargo run --locked -- pulse --steps 64 --seed 7 --mode pulse
 
 The first command reports geometry and training-state arithmetic without loading
 the planned model. The second performs at most 16 tiny CPU updates and exits.
-The third runs the ternary fixture. These are software checks, not a language-model training campaign or convergence
-test. There is deliberately no full-size `train` or `resume` command.
+The third runs the ternary fixture. These are software checks, not a training
+run; training the current candidate is the core path below. The 81M and 287M
+profiles stay planning-only.
+
+## Training (core path)
+
+`hexweave train --config <json>` is the production training path: the same
+hex-routed ternary model, trained with latent-weight Adam, eval-matched greedy
+routes and an anchor-only schedule, all tiles resident, with resumable
+hash-manifested checkpoints. Run it under the Job-capped owner, which pins the
+binary, enforces memory floors and writes receipts:
+
+```powershell
+cargo build --release --locked
+python -B -m scripts.core_owner --config work/core-runs/<run>.json
+```
+
+A config names `out` (`work/core-runs/<name>`), `data`
+(`{"kind":"science","root":…,"manifest_sha256":…}` or
+`{"kind":"drill","root":"datasets/retained-text-assay"}`), `seed`, `rate`,
+`anchors`, `wall_seconds`, `checkpoint_every`, `eval_every`, `eval_cases` and
+`resume`. Write `out/STOP` (or press Ctrl+C in the owner) to end a run with a
+final checkpoint; set `resume` to continue it from the newest checkpoint that
+verifies. Design and invariants: [core path](src/causal/AGENTS.md); owner:
+[scripts/AGENTS.md](scripts/AGENTS.md).
 
 For the final integrated checks after a batch of edits:
 

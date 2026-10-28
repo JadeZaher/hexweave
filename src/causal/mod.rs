@@ -19,6 +19,11 @@ mod child_io;
 mod child_protocol;
 mod config;
 mod control;
+mod core_checkpoint;
+mod core_codec;
+mod core_drill;
+mod core_eval;
+mod core_train;
 mod credit;
 mod cursor;
 mod data;
@@ -44,6 +49,7 @@ mod prompt_evaluation;
 mod prompt_input;
 mod pulse;
 mod report;
+mod resident;
 mod routing;
 mod runner;
 mod runner_finish;
@@ -58,6 +64,8 @@ mod store_api;
 mod tile;
 mod tile_gradients;
 mod tuning;
+mod tuning_measure;
+mod tuning_sources;
 
 #[cfg(test)]
 mod anchor_comparison_contracts;
@@ -65,6 +73,8 @@ mod anchor_comparison_contracts;
 mod assay_contracts;
 #[cfg(test)]
 mod attention_contracts;
+#[cfg(test)]
+mod core_contracts;
 #[cfg(test)]
 mod data_schema_contracts;
 #[cfg(test)]
@@ -97,10 +107,6 @@ mod revision_contracts;
 mod runner_contracts;
 #[cfg(test)]
 mod tuning_harness;
-#[cfg(test)]
-mod tuning_measure;
-#[cfg(test)]
-mod tuning_sources;
 
 pub fn plan() -> anyhow::Result<serde_json::Value> {
     config::plan()
@@ -108,4 +114,9 @@ pub fn plan() -> anyhow::Result<serde_json::Value> {
 
 pub fn run_owned(request: &std::path::Path) -> anyhow::Result<serde_json::Value> {
     runner::owned(request)
+}
+
+/// Core training path: `hexweave train --config <json>`; see AGENTS.md §core.
+pub fn train(config: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+    core_train::run(config)
 }

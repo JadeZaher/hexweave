@@ -72,7 +72,8 @@ fn state_record(directory: &Path, manifest: &Manifest) -> Result<StateRecord> {
         "checkpoint state/tile versions mismatch"
     );
     ensure!(
-        record.assay.is_some() == (manifest.identity.protocol == super::assay_state::PROTOCOL),
+        record.assay.is_some() == (manifest.identity.protocol == super::assay_state::PROTOCOL)
+            && !record.anchor_only,
         "checkpoint state protocol descriptor mismatch"
     );
     if let Some(assay) = &record.assay {

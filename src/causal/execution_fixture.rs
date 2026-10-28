@@ -182,6 +182,7 @@ pub(super) fn restore(state: &State) -> Result<State> {
         counters: state.counters.clone(),
         boundary: Boundary::Ready,
         assay: state.assay.clone(),
+        anchor_only: state.anchor_only,
     })
 }
 

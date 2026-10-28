@@ -1,4 +1,4 @@
-//! Test-only tuning measurements over the assay rows; see AGENTS.md §tuning.
+//! Retrieval measurements over the assay rows (core drill eval and harness); see AGENTS.md §tuning.
 
 use super::assay_measure::measure;
 use super::assay_source::{Row, Source};

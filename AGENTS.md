@@ -16,7 +16,11 @@ executed through the existing mechanisms, not around them — any terminal
 a fresh plan is prepared and pinned, and the in-code STOP check and plan
 schema remain in force. Admission honors `HEXWEAVE_CAUSAL_ADMISSION`
 (`strict` default; `elastic` starts on available memory above a fixed floor,
-with graceful resource-stop scaleback). The 81M/287M profiles stay
+with graceful resource-stop scaleback). Owner decision 2026-10-27: the core
+path (`hexweave train --config`, run under `scripts/core_owner.py`; see
+`src/causal/AGENTS.md` §Core path) is the production training mechanism for
+the current candidate, on public train/dev data only; private evaluation
+material stays unread. The 81M/287M profiles stay
 planning-only until independent numerical, resource, ownership and checkpoint
 reviews pass. Never silently download models, start servers or use cloud;
 background-worker and cleanup rules are unchanged.

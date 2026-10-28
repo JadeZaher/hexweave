@@ -38,6 +38,25 @@ pub(super) fn draw(base: u64, coordinate: usize) -> f64 {
     (x >> 11) as f64 * (1.0 / 9_007_199_254_740_992.0)
 }
 
+/// Profile E update shared by the assay ledger and the core path; None keeps the pinned rule.
+pub(super) fn tuned(shared: &mut Shared, gradient: &[f32]) -> Result<Option<u64>> {
+    let knobs = super::tuning::current();
+    let Some(rate) = knobs.embed_rate else {
+        return Ok(None);
+    };
+    super::norm::vector(gradient, shared.embedding.len())?;
+    let next = shared
+        .version
+        .checked_add(1)
+        .context("E version overflow")?;
+    let key = (super::geometry::TILES, 0);
+    let moved = super::tuning::update(&knobs, rate, key, &mut shared.embedding, gradient)?;
+    if moved > 0 {
+        shared.version = next;
+    }
+    Ok(Some(u64::try_from(moved)?))
+}
+
 pub(super) fn apply(
     shared: &mut Shared,
     gradient: &[f32],
@@ -50,14 +69,7 @@ pub(super) fn apply(
         .version
         .checked_add(1)
         .context("E version overflow")?;
-    let knobs = super::tuning::current();
-    if let Some(rate) = knobs.embed_rate {
-        let key = (super::geometry::TILES, 0);
-        let moved =
-            super::tuning::update(&knobs, rate, key, &mut shared.embedding, gradient)? as u64;
-        if moved > 0 {
-            shared.version = next;
-        }
+    if let Some(moved) = tuned(shared, gradient)? {
         return Ok(Metrics {
             attempts: moved,
             clamped: 0,
