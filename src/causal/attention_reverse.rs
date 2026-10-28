@@ -23,7 +23,7 @@ pub(super) fn backward(
         &cache.attended,
         scale,
     )?;
-    let attended_adjoint = norm::transpose(&tile.matrices[O], &output_adjoint, scale)?;
+    let attended_adjoint = tile.transpose(O, &output_adjoint, scale)?;
     let mut query_adjoint = vec![0.0; d];
     for head in 0..h {
         let query = head_backward(
@@ -47,7 +47,7 @@ pub(super) fn backward(
         &cache.normalized.values,
         scale,
     )?;
-    let normalized_adjoint = norm::transpose(&tile.matrices[Q], &query_adjoint, scale)?;
+    let normalized_adjoint = tile.transpose(Q, &query_adjoint, scale)?;
     let mut result = norm::backward(
         &cache.normalized.values,
         cache.normalized.inverse,
@@ -75,14 +75,14 @@ fn head_backward(
     let score_scale = scale / (k as f32).sqrt() * super::tuning::current().attention_scale;
     let start = head * k;
     let value_adjoint = &attended_adjoint[start..start + k];
-    let mut summary_adjoint = tile.matrices[V].transpose_rows(start, k, value_adjoint)?;
+    let mut summary_adjoint = tile.transpose_rows(V, start, k, value_adjoint)?;
     norm::scale_in_place(&mut summary_adjoint, scale)?;
     let probabilities = &cache.probabilities[head * length..(head + 1) * length];
     let scores = score_adjoint(memory, &summary_adjoint, probabilities)?;
     let mut score_vector_adjoint = vec![0.0; d];
     weighted_sum(&mut score_vector_adjoint, memory, &scores);
     norm::finite(&score_vector_adjoint)?;
-    let mut query = tile.matrices[K].forward_rows(start, k, &score_vector_adjoint)?;
+    let mut query = tile.project_rows(K, start, k, &score_vector_adjoint)?;
     norm::scale_in_place(&mut query, score_scale)?;
     if let Some(gradient) = gradients {
         grad::add_outer(

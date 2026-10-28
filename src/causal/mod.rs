@@ -14,6 +14,8 @@ mod config;
 mod core_best;
 mod core_checkpoint;
 mod core_codec;
+mod core_config;
+mod core_corpus;
 mod core_drill;
 mod core_eval;
 mod core_redeal;
@@ -50,6 +52,7 @@ mod tile_gradients;
 mod tuning;
 mod tuning_measure;
 mod tuning_sources;
+mod weights;
 
 #[cfg(test)]
 mod assay_contracts;

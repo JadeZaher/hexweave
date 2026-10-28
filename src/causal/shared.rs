@@ -86,7 +86,7 @@ impl Shared {
         let mut memory = Vec::with_capacity(bytes.len() * self.geometry.width);
         let mut inverse = Vec::with_capacity(bytes.len());
         for (position, &byte) in bytes.iter().enumerate() {
-            let mut column = self.embedding.column(usize::from(byte))?;
+            let mut column = self.embedding_column(usize::from(byte))?;
             positions::add(position, &mut column)?;
             let row = norm::rms(&column)?;
             memory.extend(row.values);
@@ -103,7 +103,7 @@ impl Shared {
     pub fn readout(&self, output: &[f32]) -> Result<Readout> {
         norm::vector(output, self.geometry.width)?;
         let normalized = norm::rms(output)?;
-        let logits = norm::transpose(&self.embedding, &normalized.values, self.logit_scale())?;
+        let logits = self.embedding_transpose(&normalized.values, self.logit_scale())?;
         Ok(Readout { normalized, logits })
     }
 
@@ -119,7 +119,7 @@ impl Shared {
         norm::softmax(&mut delta)?;
         delta[usize::from(target)] -= 1.0;
         let scale = self.logit_scale();
-        let input = norm::project(&self.embedding, &delta, scale)?;
+        let input = self.embedding_project(&delta, scale)?;
         let input_correction = norm::backward(
             &readout.normalized.values,
             readout.normalized.inverse,

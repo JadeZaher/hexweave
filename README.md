@@ -63,6 +63,10 @@ A config names `out` (`work/core-runs/<name>`), `data`
 `resume`. Write `out/STOP` (or press Ctrl+C in the owner) to end a run with a
 final checkpoint; set `resume` to continue it from the newest checkpoint that
 verifies. Science runs also keep their lowest-dev-loss checkpoint in `out/best/`.
+For plain-text pretraining, prepare a corpus with `python -B -m
+scripts.prepare_corpus --source <stories.txt> --out work/corpora/<name>` and use
+`{"kind":"corpus","root":…,"manifest_sha256":…,"window":512}`; add
+`"float_forward":true` to train the same architecture with f32 weights.
 Design and invariants: [core path](src/causal/AGENTS.md); owner:
 [scripts/AGENTS.md](scripts/AGENTS.md).
 

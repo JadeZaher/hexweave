@@ -5,6 +5,8 @@ use super::assay_source::Source as AssaySource;
 use super::assay_state::MANIFEST_SHA;
 use super::core_best;
 use super::core_checkpoint::{self, PROTOCOL};
+use super::core_config::{Config, Data};
+use super::core_corpus::Corpus;
 use super::core_drill::Drill;
 use super::core_eval;
 use super::core_redeal::CitationRedeal;
@@ -14,94 +16,19 @@ use super::execution::{self, TrainingSource};
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
-use super::storage_paths::digest;
-use super::tuning::{self, Knobs};
+use super::tuning;
 use anyhow::{bail, ensure, Context, Result};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
-enum Data {
-    /// Source-grounded QA rows (train split) with dev-split assessment.
-    Science {
-        root: PathBuf,
-        manifest_sha256: String,
-        /// Re-deal each epoch's SOURCE values and citations (`core_redeal`); absent means off.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        redeal_citations: bool,
-    },
-    /// Unbounded retrieval drill over the retained-text assay templates.
-    Drill { root: PathBuf },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Config {
-    schema: u32,
-    out: PathBuf,
-    data: Data,
-    seed: u64,
-    rate: f64,
-    anchors: u64,
-    wall_seconds: u64,
-    checkpoint_every: u64,
-    eval_every: u64,
-    eval_cases: usize,
-    resume: bool,
-}
-
-impl Config {
-    fn validate(&self) -> Result<()> {
-        ensure!(self.schema == 1, "core config schema must be 1");
-        let parts: Vec<Component<'_>> = self.out.components().collect();
-        ensure!(
-            matches!(parts.as_slice(), [Component::Normal(work), Component::Normal(runs), Component::Normal(_)]
-                if *work == "work" && *runs == "core-runs"),
-            "out must be work/core-runs/<name>"
-        );
-        ensure!(
-            self.rate.is_finite() && self.rate > 0.0 && self.rate <= 1.0,
-            "rate must be in (0, 1]"
-        );
-        ensure!(
-            self.anchors > 0
-                && self.checkpoint_every > 0
-                && self.eval_every > 0
-                && self.wall_seconds > 0,
-            "anchors, checkpoint_every, eval_every and wall_seconds must be positive"
-        );
-        ensure!(
-            (1..=32).contains(&self.eval_cases),
-            "eval_cases must be in 1..=32"
-        );
-        Ok(())
-    }
-
-    /// Numerics identity: resuming requires the same protocol, geometry, data, seed, rate and knobs.
-    fn identity(&self) -> Result<String> {
-        let value = json!({ "protocol": PROTOCOL, "geometry": Geometry::candidate(),
-                            "data": &self.data, "seed": self.seed, "rate": self.rate,
-                            "numerics": Knobs::core(self.rate, self.seed) });
-        Ok(digest(&serde_json::to_vec(&value)?))
-    }
-}
-
-/// Run identity of a config document, for the identity contracts.
-#[cfg(test)]
-pub(super) fn identity_of(config: &[u8]) -> Result<String> {
-    serde_json::from_slice::<Config>(config)?.identity()
-}
 
 /// Run (or resume) one core training job from a JSON config.
 pub(super) fn run(path: &Path) -> Result<Value> {
     let config: Config = serde_json::from_slice(&std::fs::read(path)?)?;
     config.validate()?;
     std::fs::create_dir_all(&config.out)?;
-    tuning::install(Knobs::core(config.rate, config.seed));
+    tuning::install(config.knobs());
     let geometry = Geometry::candidate();
     match &config.data {
         Data::Science {
@@ -132,6 +59,17 @@ pub(super) fn run(path: &Path) -> Result<Value> {
             let start = State::with_cursor(geometry, config.seed, drill.cursor(0)?)?;
             drive(&config, &drill, start, &mut |state, store| {
                 core_eval::drill(state, store, &assay)
+            })
+        }
+        Data::Corpus {
+            root,
+            manifest_sha256,
+            window,
+        } => {
+            let corpus = Corpus::open(root, manifest_sha256, *window)?;
+            let start = State::with_cursor(geometry, config.seed, corpus.cursor(0)?)?;
+            drive(&config, &corpus, start, &mut |state, store| {
+                core_eval::corpus(state, store, &corpus)
             })
         }
     }
@@ -220,7 +158,7 @@ fn drive<S: TrainingSource>(
 ) -> Result<Value> {
     let started = Instant::now();
     ensure!(
-        tuning::current() == Knobs::core(config.rate, config.seed),
+        tuning::current() == config.knobs(),
         "core numerics profile is not installed"
     );
     let identity = config.identity()?;

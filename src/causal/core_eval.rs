@@ -1,17 +1,82 @@
 //! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
+use super::core_corpus::{window_before, Corpus, END};
 use super::data::Dataset;
 use super::evaluation::{self, Limits, Loss};
+use super::execution::forward_path;
 use super::generation::{self, Terminal};
 use super::resident::ResidentStore;
 use super::state::State;
+use super::tuning;
 use super::tuning_measure;
 use anyhow::Result;
 use serde_json::{json, Value};
 
+const HELDOUT_SPANS: usize = 16;
+const HELDOUT_SPAN: usize = 128;
+const STORY_PROMPTS: [&str; 4] = [
+    "Once upon a time",
+    "One day, a little girl named Lily",
+    "Tom and his dog went to the",
+    "The sun was",
+];
+
 fn per_byte(loss: &Loss) -> f64 {
     loss.nll_sum / loss.targets.max(1) as f64
+}
+
+/// Held-out bits per byte under both forward modes on the same weights (the run's own mode and,
+/// as `alternate`, the other), plus greedy continuations of story openings in the run's mode.
+pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<Value> {
+    let float = tuning::current().float_forward;
+    let (own, targets) = heldout_nll(state, store, corpus)?;
+    tuning::set_float_forward(!float);
+    let alternate = heldout_nll(state, store, corpus);
+    tuning::set_float_forward(float);
+    let (alternate, _) = alternate?;
+    let mut never = || -> Result<Option<Terminal>> { Ok(None) };
+    let mut samples = Vec::with_capacity(STORY_PROMPTS.len());
+    for prompt in STORY_PROMPTS {
+        let opening = [&[END][..], prompt.as_bytes()].concat();
+        let generation = generation::generate(state, store, &opening, 160, &mut never)?;
+        samples.push(
+            json!({ "prompt": prompt, "text": String::from_utf8_lossy(&generation.raw_bytes) }),
+        );
+    }
+    let mode = |float: bool| if float { "float" } else { "ternary" };
+    let bits = |nats: f64| nats / std::f64::consts::LN_2;
+    Ok(json!({
+        "dev_nll_per_byte": own, "dev_bits_per_byte": bits(own), "forward": mode(float),
+        "alternate_forward": mode(!float), "alternate_bits_per_byte": bits(alternate),
+        "heldout_targets": targets, "samples": samples,
+    }))
+}
+
+/// Mean held-out NLL (nats per byte) over fixed spans under the installed forward mode.
+fn heldout_nll(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<(f64, u64)> {
+    let heldout = &corpus.heldout;
+    let stride = heldout.len() / HELDOUT_SPANS;
+    let (mut nll, mut targets) = (0.0f64, 0u64);
+    for span in 0..HELDOUT_SPANS {
+        for t in span * stride..(span * stride + HELDOUT_SPAN).min(heldout.len()) {
+            let prefix = state
+                .shared
+                .prefix(&window_before(heldout, t, corpus.window))?;
+            let width = state.geometry.width;
+            let trace = forward_path(
+                store,
+                state.geometry,
+                &prefix,
+                vec![0.0; width],
+                &mut None,
+                state.tile_versions,
+            )?;
+            nll += f64::from(state.shared.readout(&trace.output)?.loss(heldout[t])?);
+            targets += 1;
+        }
+    }
+    Ok((nll / targets.max(1) as f64, targets))
 }
 
 /// Public dev-set assessment (teacher-forced NLL plus greedy JSON answers) and train samples.

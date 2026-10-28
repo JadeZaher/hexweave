@@ -18,15 +18,14 @@ pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cach
     let (length, k, scale) = (memory.len() / d, d / h, (d as f32).sqrt().recip());
     let score_scale = scale / (k as f32).sqrt() * super::tuning::current().attention_scale;
     let normalized = norm::rms(input)?;
-    let query = norm::project(&tile.matrices[Q], &normalized.values, scale)?;
+    let query = tile.project(Q, &normalized.values, scale)?;
     let mut score_vectors = Vec::with_capacity(h * d);
     let mut summaries = vec![0.0; h * d];
     let mut probabilities = vec![0.0; h * length];
     let mut attended = vec![0.0; d];
     for head in 0..h {
         let start = head * k;
-        let mut score_vector =
-            tile.matrices[K].transpose_rows(start, k, &query[start..start + k])?;
+        let mut score_vector = tile.transpose_rows(K, start, k, &query[start..start + k])?;
         norm::scale_in_place(&mut score_vector, score_scale)?;
         let scores = &mut probabilities[head * length..(head + 1) * length];
         for (score, row) in scores.iter_mut().zip(memory.chunks_exact(d)) {
@@ -36,12 +35,12 @@ pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cach
         let summary = &mut summaries[head * d..(head + 1) * d];
         weighted_sum(summary, memory, scores);
         norm::finite(summary)?;
-        let mut value = tile.matrices[V].forward_rows(start, k, summary)?;
+        let mut value = tile.project_rows(V, start, k, summary)?;
         norm::scale_in_place(&mut value, scale)?;
         attended[start..start + k].copy_from_slice(&value);
         score_vectors.extend(score_vector);
     }
-    let output = norm::project(&tile.matrices[O], &attended, scale)?;
+    let output = tile.project(O, &attended, scale)?;
     Ok(Cache {
         normalized,
         query,

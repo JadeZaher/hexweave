@@ -42,6 +42,9 @@ pub(super) struct Knobs {
     /// Added to the training route seed; pinned 0.
     pub route_salt: u64,
     pub seed: u64,
+    /// Compute with each matrix's f32 latent weights instead of its trits (`weights.rs`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub float_forward: bool,
 }
 
 impl Knobs {
@@ -57,6 +60,7 @@ impl Knobs {
         no_halt: false,
         route_salt: 0,
         seed: 0,
+        float_forward: false,
     };
 
     /// Core path (causal-latent-v1): latent Adam on tiles and E, greedy routes, pinned forward.
@@ -116,6 +120,24 @@ pub(super) fn install(knobs: Knobs) {
     LATENTS.with(|cell| cell.borrow_mut().clear());
 }
 
+/// Switch float-forward mode only, keeping latents and draws (for the alternate-mode evaluation).
+pub(super) fn set_float_forward(on: bool) {
+    KNOBS.with(|cell| {
+        cell.set(Knobs {
+            float_forward: on,
+            ..cell.get()
+        })
+    });
+}
+
+/// Run `f` on `key`'s latent weights when float-forward mode is on and they exist.
+pub(super) fn with_float<R>(key: (usize, usize), f: impl FnOnce(&[f32]) -> R) -> Option<R> {
+    if !current().float_forward {
+        return None;
+    }
+    LATENTS.with(|cell| cell.borrow().get(&key).map(|latent| f(&latent.weights)))
+}
+
 /// Restores pinned knobs when dropped, so tuned settings never outlive their test.
 #[cfg(test)]
 pub(super) struct Scoped;
@@ -150,6 +172,33 @@ fn next_call() -> u64 {
 
 /// Latent states keyed (owner, matrix); owner `TILES` is the tied E.
 pub(super) type Latents = Vec<((usize, usize), Latent)>;
+
+/// Test helper: off-lattice latents (half the trit plus a sine ripple) for the given matrices.
+#[cfg(test)]
+pub(super) fn ripple_latents(matrices: &[((usize, usize), &TernaryMatrix)]) -> Result<()> {
+    let mut latents = Vec::with_capacity(matrices.len());
+    for (key, matrix) in matrices {
+        let weights = (0..matrix.len())
+            .map(|i| {
+                Ok(
+                    (0.5 * f32::from(matrix.value(i)?) + 0.3 * (i as f32 * 0.7).sin())
+                        .clamp(-1.0, 1.0),
+                )
+            })
+            .collect::<Result<Vec<f32>>>()?;
+        let moments = vec![0.0; 2 * weights.len()];
+        latents.push((
+            *key,
+            Latent {
+                weights,
+                moments,
+                step: 0,
+            },
+        ));
+    }
+    import(latents, 0);
+    Ok(())
+}
 
 /// Copy of the latent state and draw counter, for checkpoints.
 pub(super) fn export() -> (Latents, u64) {

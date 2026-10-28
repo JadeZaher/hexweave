@@ -1,4 +1,3 @@
-use super::norm;
 use super::tile::Tile;
 use super::tile_gradients::{self as grad, TileGradients, P, U};
 use anyhow::Result;
@@ -22,15 +21,11 @@ impl Cache {
 pub(super) fn forward(tile: &Tile, normalized: &[f32], history: &[f32]) -> Result<Cache> {
     let d = tile.geometry.width;
     let features: Vec<_> = normalized.iter().chain(history).copied().collect();
-    let mut latent = norm::project(
-        &tile.matrices[U],
-        &features,
-        (2.0 * d as f32).sqrt().recip(),
-    )?;
+    let mut latent = tile.project(U, &features, (2.0 * d as f32).sqrt().recip())?;
     for value in &mut latent {
         *value = value.tanh();
     }
-    let heads = norm::project(&tile.matrices[P], &latent, (d as f32).sqrt().recip())?;
+    let heads = tile.project(P, &latent, (d as f32).sqrt().recip())?;
     Ok(Cache {
         features,
         latent,
@@ -61,7 +56,7 @@ pub(super) fn backward(
         &cache.latent,
         scale,
     )?;
-    let mut latent_adjoint = norm::transpose(&tile.matrices[P], &heads_adjoint, scale)?;
+    let mut latent_adjoint = tile.transpose(P, &heads_adjoint, scale)?;
     for (value, &latent) in latent_adjoint.iter_mut().zip(&cache.latent) {
         *value *= 1.0 - latent * latent;
     }
@@ -73,7 +68,7 @@ pub(super) fn backward(
         &cache.features,
         context_scale,
     )?;
-    let mut input = norm::transpose(&tile.matrices[U], &latent_adjoint, context_scale)?;
+    let mut input = tile.transpose(U, &latent_adjoint, context_scale)?;
     input.truncate(d);
     Ok(input)
 }

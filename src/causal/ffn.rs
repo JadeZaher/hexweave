@@ -13,7 +13,7 @@ pub(super) struct Cache {
 
 pub(super) fn forward(tile: &Tile, normalized: &[f32]) -> Result<Cache> {
     let scale = (tile.geometry.width as f32).sqrt().recip();
-    let mut gate = norm::project(&tile.matrices[G], normalized, scale)?;
+    let mut gate = tile.project(G, normalized, scale)?;
     for value in &mut gate {
         *value = if *value >= 0.0 {
             1.0 / (1.0 + (-*value).exp())
@@ -22,17 +22,13 @@ pub(super) fn forward(tile: &Tile, normalized: &[f32]) -> Result<Cache> {
             e / (1.0 + e)
         };
     }
-    let preactivation = norm::project(&tile.matrices[A], normalized, scale)?;
+    let preactivation = tile.project(A, normalized, scale)?;
     let mut curved = Vec::with_capacity(tile.geometry.ffn);
     for (j, &z) in preactivation.iter().enumerate() {
         curved.push(curve(tile, j, z)?.0);
     }
     let product: Vec<_> = gate.iter().zip(&curved).map(|(g, c)| g * c).collect();
-    let output = norm::project(
-        &tile.matrices[DOWN],
-        &product,
-        (tile.geometry.ffn as f32).sqrt().recip(),
-    )?;
+    let output = tile.project(DOWN, &product, (tile.geometry.ffn as f32).sqrt().recip())?;
     Ok(Cache {
         gate,
         preactivation,
@@ -59,7 +55,7 @@ pub(super) fn backward(
         &cache.product,
         down_scale,
     )?;
-    let product_adjoint = norm::transpose(&tile.matrices[DOWN], upstream, down_scale)?;
+    let product_adjoint = tile.transpose(DOWN, upstream, down_scale)?;
     let mut gate_adjoint = vec![0.0; m];
     let mut preactivation_adjoint = vec![0.0; m];
     for j in 0..m {
@@ -81,8 +77,8 @@ pub(super) fn backward(
         scale,
     )?;
     grad::outer(gradients, A, &preactivation_adjoint, normalized, scale)?;
-    let mut result = norm::transpose(&tile.matrices[G], &gate_adjoint, scale)?;
-    let extra = norm::transpose(&tile.matrices[A], &preactivation_adjoint, scale)?;
+    let mut result = tile.transpose(G, &gate_adjoint, scale)?;
+    let extra = tile.transpose(A, &preactivation_adjoint, scale)?;
     norm::add(&mut result, &extra)?;
     Ok(result)
 }
@@ -90,10 +86,8 @@ pub(super) fn backward(
 fn curve(tile: &Tile, channel: usize, z: f32) -> Result<(f32, f32)> {
     let (segment, fraction) = interpolation(z);
     let m = tile.geometry.ffn;
-    let left =
-        segment as f32 - 1.0 + f32::from(tile.matrices[CURVE].value(segment * m + channel)?) * 0.25;
-    let right =
-        segment as f32 + f32::from(tile.matrices[CURVE].value((segment + 1) * m + channel)?) * 0.25;
+    let left = segment as f32 - 1.0 + tile.weight(CURVE, segment * m + channel)? * 0.25;
+    let right = segment as f32 + tile.weight(CURVE, (segment + 1) * m + channel)? * 0.25;
     Ok((
         left * (1.0 - fraction) + right * fraction,
         (right - left) * 0.5,

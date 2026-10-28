@@ -5,14 +5,16 @@ use super::assay_source::{cursor, Source};
 use super::assay_state::{Progress, MANIFEST_SHA};
 use super::assay_update::Rule;
 use super::core_codec::encode_latents;
+use super::core_config::identity_of;
+use super::core_corpus::{window_before, Corpus, START};
 use super::core_drill::{Drill, CYCLE};
-use super::core_train::identity_of;
 use super::execution::{self, TrainingSource};
 use super::generation::Terminal;
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
 use super::state_codec::{encode_predictor, encode_shared, encode_tile};
+use super::storage_paths::digest;
 use super::tuning::{self, Knobs};
 use super::tuning_sources::Shuffled;
 use anyhow::{Context, Result};
@@ -217,5 +219,44 @@ fn drill_stream_is_the_harness_stream_and_answers_need_the_key() -> Result<()> {
             "drill answer must be the asked key's value"
         );
     }
+    Ok(())
+}
+
+/// The corpus reads its pinned train file by window from disk: prefixes and targets equal the
+/// in-memory window across the window edge and two epoch wraps; a tampered train file is refused.
+#[test]
+fn corpus_stream_reads_windows_and_wraps_epochs() -> Result<()> {
+    let root = fresh_temp("corpus")?;
+    std::fs::create_dir_all(&root)?;
+    let train: Vec<u8> = (0..200u8).map(|i| b'a' + i % 26).collect();
+    let heldout = b"a held-out story".to_vec();
+    let entry = |bytes: &[u8]| json!({ "bytes": bytes.len(), "sha256": digest(bytes) });
+    let manifest = serde_json::to_vec(&json!({ "schema": 1, "kind": "byte-corpus",
+        "files": { "train.txt": entry(&train), "heldout.txt": entry(&heldout) } }))?;
+    std::fs::write(root.join("train.txt"), &train)?;
+    std::fs::write(root.join("heldout.txt"), &heldout)?;
+    std::fs::write(root.join("manifest.json"), &manifest)?;
+    let corpus = Corpus::open(&root, &digest(&manifest), 64)?;
+    assert_eq!(window_before(&train, 0, 64), [START]);
+    assert_eq!(
+        window_before(&train, 63, 64),
+        [&[START][..], &train[..63]].concat()
+    );
+    assert_eq!(window_before(&train, 64, 64), train[..64]);
+    let mut cursor = corpus.cursor(0)?;
+    for n in 0..450u64 {
+        let t = (n % 200) as usize;
+        assert_eq!((cursor.epoch, cursor.completion_offset), (n / 200, t));
+        assert_eq!(
+            corpus.pending_prefix(&cursor)?,
+            window_before(&train, t, 64),
+            "prefix at {n}"
+        );
+        assert_eq!(corpus.anchor_target(&cursor)?.byte, train[t]);
+        corpus.advance_anchor(&mut cursor)?;
+    }
+    std::fs::write(root.join("train.txt"), &train[1..])?;
+    assert!(Corpus::open(&root, &digest(&manifest), 64).is_err());
+    std::fs::remove_dir_all(&root)?;
     Ok(())
 }

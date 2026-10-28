@@ -15,11 +15,7 @@ pub(super) fn probabilities(
     norm::vector(heads, 2 * d + r)?;
     let normalized = norm::rms(output)?;
     let features: Vec<_> = normalized.values.iter().chain(history).copied().collect();
-    let mut values = norm::project(
-        &tile.matrices[ROUTER],
-        &features,
-        (2.0 * d as f32).sqrt().recip(),
-    )?;
+    let mut values = tile.project(ROUTER, &features, (2.0 * d as f32).sqrt().recip())?;
     for (i, value) in values.iter_mut().enumerate() {
         *value += 0.25 * heads[2 * d + i];
     }

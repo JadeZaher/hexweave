@@ -52,6 +52,7 @@ fn knobs(seed: u64) -> Result<Knobs> {
         no_halt: env("HEXWEAVE_TUNE_NO_HALT")?.unwrap_or(false),
         route_salt: 0,
         seed,
+        float_forward: false,
     })
 }
 

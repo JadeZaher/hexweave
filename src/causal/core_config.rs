@@ -1,0 +1,107 @@
+//! Core run configuration: data kinds, validation and the persisted run identity; see AGENTS.md §core.
+
+use super::core_checkpoint::PROTOCOL;
+use super::geometry::Geometry;
+use super::storage_paths::digest;
+use super::tuning::Knobs;
+use anyhow::{ensure, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::path::{Component, PathBuf};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub(super) enum Data {
+    /// Source-grounded QA rows (train split) with dev-split assessment.
+    Science {
+        root: PathBuf,
+        manifest_sha256: String,
+        /// Re-deal each epoch's SOURCE values and citations (`core_redeal`); absent means off.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        redeal_citations: bool,
+    },
+    /// Unbounded retrieval drill over the retained-text assay templates.
+    Drill { root: PathBuf },
+    /// Next-byte pretraining over a pinned plain-text corpus (`core_corpus`).
+    Corpus {
+        root: PathBuf,
+        manifest_sha256: String,
+        /// Bytes of context per prediction, at most the 1,023 the candidate's context allows.
+        window: usize,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Config {
+    pub schema: u32,
+    pub out: PathBuf,
+    pub data: Data,
+    pub seed: u64,
+    pub rate: f64,
+    pub anchors: u64,
+    pub wall_seconds: u64,
+    pub checkpoint_every: u64,
+    pub eval_every: u64,
+    pub eval_cases: usize,
+    pub resume: bool,
+    /// Compute with f32 latent weights instead of trits (`weights.rs`); absent means ternary.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub float_forward: bool,
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema == 1, "core config schema must be 1");
+        let parts: Vec<Component<'_>> = self.out.components().collect();
+        ensure!(
+            matches!(parts.as_slice(), [Component::Normal(work), Component::Normal(runs), Component::Normal(_)]
+                if *work == "work" && *runs == "core-runs"),
+            "out must be work/core-runs/<name>"
+        );
+        ensure!(
+            self.rate.is_finite() && self.rate > 0.0 && self.rate <= 1.0,
+            "rate must be in (0, 1]"
+        );
+        ensure!(
+            self.anchors > 0
+                && self.checkpoint_every > 0
+                && self.eval_every > 0
+                && self.wall_seconds > 0,
+            "anchors, checkpoint_every, eval_every and wall_seconds must be positive"
+        );
+        ensure!(
+            (1..=32).contains(&self.eval_cases),
+            "eval_cases must be in 1..=32"
+        );
+        if let Data::Corpus { window, .. } = &self.data {
+            ensure!(
+                (32..=1023).contains(window),
+                "corpus window must be in 32..=1023"
+            );
+        }
+        Ok(())
+    }
+
+    /// The numerics profile this run installs, checks and resumes under.
+    pub fn knobs(&self) -> Knobs {
+        Knobs {
+            float_forward: self.float_forward,
+            ..Knobs::core(self.rate, self.seed)
+        }
+    }
+
+    /// Numerics identity: resuming requires the same protocol, geometry, data, seed, rate and knobs.
+    pub fn identity(&self) -> Result<String> {
+        let value = json!({ "protocol": PROTOCOL, "geometry": Geometry::candidate(),
+                            "data": &self.data, "seed": self.seed, "rate": self.rate,
+                            "numerics": self.knobs() });
+        Ok(digest(&serde_json::to_vec(&value)?))
+    }
+}
+
+/// Run identity of a config document, for the identity contracts.
+#[cfg(test)]
+pub(super) fn identity_of(config: &[u8]) -> Result<String> {
+    serde_json::from_slice::<Config>(config)?.identity()
+}

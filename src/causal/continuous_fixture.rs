@@ -37,9 +37,10 @@ impl Reference {
         let weights = tile
             .matrices
             .iter()
-            .map(|matrix| {
+            .enumerate()
+            .map(|(matrix_index, matrix)| {
                 (0..matrix.len())
-                    .map(|index| Ok(f64::from(matrix.value(index)?)))
+                    .map(|index| Ok(f64::from(tile.weight(matrix_index, index)?)))
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<_>>()?;

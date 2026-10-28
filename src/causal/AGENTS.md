@@ -47,6 +47,24 @@ rejected) exists; if every checkpoint fails verification it refuses to restart
 from anchor 0. A fresh run refuses existing checkpoints. Changing `anchors` or
 `wall_seconds` extends a run. `out` must be `work/core-runs/<name>`.
 
+Data: `corpus` (`core_corpus`) is next-byte pretraining over a pinned plain-text
+corpus (`scripts/prepare_corpus.py`: stories END-terminated with 0x03, every
+20th held out, SHA-256 manifest). Target n is train byte n mod length, predicted
+from the last `window` (32-1023) bytes of `[START 0x02] + train`; the train file
+is read by window from disk, so memory stays flat however large it grows. Its
+evaluation is teacher-forced held-out bits per byte over 16 fixed spans of 128
+bytes in both forward modes on the same weights (`dev_*` for the run's mode,
+`alternate_*` for the other), plus greedy continuations of four story openings.
+
+Forward mode: `float_forward: true` (a `Knobs` field, so part of the identity;
+absent means ternary) makes every weight product read the matrix's f32 latent
+instead of its trits (`weights.rs`: tile project/transpose, head row blocks,
+activation-curve offsets, tied-E column/project/transpose); latent Adam then
+trains a float model of the same architecture with exact gradients, and the
+trits are its post-hoc ternarization. Off, every call reaches the unchanged
+ternary kernels; the harness parity test and the gradient oracles (which add a
+float case with off-lattice latents against the f64 reference) pin both.
+
 Data: `science` trains on a pinned QA Dataset's train split and evaluates the
 development split with `evaluation::evaluate` (teacher-forced NLL, coverage,
 greedy JSON answers, exact answer/citation) plus four train-row samples. Every

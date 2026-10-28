@@ -22,8 +22,19 @@ fn largest(values: &[f32], start: usize, end: usize) -> usize {
 
 #[test]
 fn continuous_reference_checks_every_task_matrix_and_detached_policy_heads() -> Result<()> {
-    for knobs in [Knobs::PINNED, Knobs::ORACLE] {
+    let float = Knobs {
+        float_forward: true,
+        ..Knobs::ORACLE
+    };
+    for knobs in [Knobs::PINNED, Knobs::ORACLE, float] {
         let _pinned_on_exit = super::tuning::scoped(knobs);
+        if knobs.float_forward {
+            let tile = Tile::new(Geometry::fixture(), 3, 71)?;
+            let keys: Vec<_> = (0..tile.matrices.len())
+                .map(|i| ((3, i), &tile.matrices[i]))
+                .collect();
+            super::tuning::ripple_latents(&keys)?;
+        }
         check_reference()?;
     }
     Ok(())

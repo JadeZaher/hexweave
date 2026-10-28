@@ -32,6 +32,14 @@ and an owner error recovers this launch's owner-written STOP reason first, e.g.
 written on every exit path the owner itself survives (not console close or
 reboot, which leave `OWNER.lock` for manual removal).
 
+## Corpus preparation
+
+`prepare_corpus.py` turns a TinyStories-format file (stories separated by
+`<|endoftext|>`) into `train.txt` and `heldout.txt` (every Nth story, default
+20), each story ending with byte 0x03, plus a `manifest.json` recording both
+files' sizes and SHA-256s and the source path, size and SHA-256. The leading
+fragment before the first separator is dropped. Output goes under `work/`.
+
 ## Windows resource helpers
 
 `owner_resources.py` samples host memory and the child's working set and builds
