@@ -56,9 +56,13 @@ while dev prompts name D01-D06). `redeal_citations: true` (`core_redeal`)
 replaces that value with a fresh same-shape one per (row, epoch) in the prompt
 and its citation, keeping every length, kind and cursor of the inner dataset,
 so citing can only be learned as copying; dev is never re-dealt. Science runs
-keep their lowest-dev-NLL state under `out/best/` (`selection.json` holds the
-anchors and score; resume reads it), since the newest-three rotation had
-pruned the 72-row run's best state (80k anchors) once the 140k checkpoint landed.
+keep their lowest-dev-NLL state under `out/best/checkpoints` (up to three; the
+newest is the selected one) with an identity-stamped `selection.json` published
+atomically (`core_best`): another run's selection is ignored, a fresh run (and
+the owner) refuses a non-empty `out/best`, a better repeat at an anchor that
+already has a best checkpoint only updates the selection, and a failed best
+save is logged, never fatal. The newest-three rotation had pruned the 72-row
+run's best state (80k anchors) once the 140k checkpoint landed.
 `drill` (`core_drill`, v2) replays the assay schedule in 1,600-anchor cycles
 (16 foundation passes, then 4 retention-stress passes) and re-deals values and
 the asked key with `tuning_sources::redeal` under the harness's per-cycle salt,
@@ -83,7 +87,11 @@ predictor, latents, history, baseline, loss); the drill stream equals
 `core_resume_contracts`: resume past a corrupt newest checkpoint is bit exact,
 leaves a stale `.partial` alone, stops on any foreign identity before
 quarantining anything, quarantines only integrity failures and, once every
-checkpoint is quarantined, refuses a fresh start. Beyond the first cycle runs agree in
+checkpoint is quarantined, refuses a fresh start; best-checkpoint selection
+survives a repeated anchor and ignores other runs. `core_redeal_contracts`
+walks the real cursor through an epoch boundary: only the SOURCE value and its
+citation change, every citation byte copies the prompt, and values change per
+epoch and per seed. Beyond the first cycle runs agree in
 distribution, not bits: the harness rebuilds State (empty history) every 1,600
 anchors and the core path does not. Logs go to `out/log.jsonl` (lines after the last checkpoint repeat
 after a resume), the summary to `out/report.json`. End a run with `out/STOP`

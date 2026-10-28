@@ -40,8 +40,14 @@ training fit has been measured.
   (interval train loss 0.121-0.169, below the 0.139 key-blind floor at 8 of
   those 14 evaluations), then 0/32 at 124.8k and 128k. Paraphrase stays near
   chance. Not yet stable: no learning-rate decay or best-checkpoint retention exists.
-- `work/core-runs/science-overnight`: running (8-hour wall budget); no result is
-  claimed here yet.
+- `work/core-runs/science-overnight` (seed 7, rate 0.003, 72 train rows; stopped
+  by the operator at 578,547 anchors, epoch 86): dev NLL bottomed at 2.430 per
+  byte at 80k anchors (epoch 12) and rose to 3.089 by the stop while train loss
+  kept falling; 0/24 dev cases valid JSON, exact answer or exact citation at
+  every evaluation. Dev generations loop and cite train source T06 although each
+  dev prompt names its own D01-D06 SOURCE: the citations were memorized.
+- `work/core-runs/science-redeal-s7` and `-s17` (same settings plus
+  `redeal_citations`, 6-hour budget): running; no result is claimed here yet.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 

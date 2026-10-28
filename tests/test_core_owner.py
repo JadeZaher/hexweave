@@ -35,6 +35,7 @@ class CoreOwnerPrepareTest(unittest.TestCase):
     def test_unsafe_launches_are_refused_without_side_effects(self):
         cases = [
             ("fresh over checkpoints", False, {"checkpoints/a000000000020/manifest.json": "{}"}),
+            ("fresh over a best checkpoint", False, {"best/selection.json": "{}"}),
             ("fresh over a pinned binary", False, {"bin/hexweave.exe": "older build"}),
             ("resume past a user STOP", True, {"STOP": "operator pause"}),
         ]

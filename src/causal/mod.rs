@@ -11,6 +11,7 @@ mod attention_reverse;
 mod checkpoint_state;
 mod child_io;
 mod config;
+mod core_best;
 mod core_checkpoint;
 mod core_codec;
 mod core_drill;
@@ -56,6 +57,8 @@ mod assay_contracts;
 mod attention_contracts;
 #[cfg(test)]
 mod core_contracts;
+#[cfg(test)]
+mod core_redeal_contracts;
 #[cfg(test)]
 mod core_resume_contracts;
 #[cfg(test)]

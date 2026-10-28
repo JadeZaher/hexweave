@@ -3,6 +3,7 @@
 
 use super::assay_source::Source as AssaySource;
 use super::assay_state::MANIFEST_SHA;
+use super::core_best;
 use super::core_checkpoint::{self, PROTOCOL};
 use super::core_drill::Drill;
 use super::core_eval;
@@ -190,6 +191,8 @@ fn open(config: &Config, mut start: State, identity: &str) -> Result<(State, Res
             "{} holds checkpoints; set resume to continue",
             path.display()
         );
+    } else {
+        core_best::ensure_fresh(&config.out)?;
     }
     start.anchor_only = true;
     start.validate_boundary()?;
@@ -234,7 +237,7 @@ fn drive<S: TrainingSource>(
             .context("wall_seconds overflows the clock")?,
     );
     let mut marks = Marks::new(&state);
-    let mut best = core_eval::best_so_far(&config.out);
+    let mut best = core_best::best_so_far(&config.out, &identity);
     let mut last = if state.global_opportunity == 0 {
         Some(record(
             &mut log, &state, &mut store, &mut marks, evaluate, started,
@@ -265,7 +268,7 @@ fn drive<S: TrainingSource>(
             None
         };
         if let Some(line) = &last {
-            core_eval::keep_best(&config.out, &state, &store, &identity, line, &mut best)?;
+            core_best::keep(&config.out, &state, &store, &identity, line, &mut best);
         }
     };
     let n = state.global_opportunity;
@@ -277,7 +280,7 @@ fn drive<S: TrainingSource>(
         Some(line) => line,
         None => record(&mut log, &state, &mut store, &mut marks, evaluate, started)?,
     };
-    core_eval::keep_best(&config.out, &state, &store, &identity, &last, &mut best)?;
+    core_best::keep(&config.out, &state, &store, &identity, &last, &mut best);
     let report = json!({
         "protocol": PROTOCOL, "terminal": terminal, "anchors": n, "epoch": state.cursor.epoch,
         "wall_seconds": started.elapsed().as_secs_f64(), "identity_sha256": identity,

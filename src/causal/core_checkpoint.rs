@@ -51,6 +51,14 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Replace a small file atomically: fsynced `<name>.partial`, then a retried rename.
+pub(super) fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
+    let partial = path.with_extension("partial");
+    write_synced(&partial, bytes)?;
+    retry(|| std::fs::rename(&partial, path))?;
+    Ok(())
+}
+
 /// Complete checkpoint directories (`a` + 12 digits), oldest first.
 fn checkpoints(out: &Path) -> Result<Vec<PathBuf>> {
     let root = out.join("checkpoints");

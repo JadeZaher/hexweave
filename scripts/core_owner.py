@@ -74,8 +74,9 @@ def prepare(config: dict, out: Path, clear_stop: bool) -> Path:
     """Refuse unsafe launches, then pin the binary and set aside a stale STOP and report."""
     checkpoints, binary, stop = out / "checkpoints", out / "bin" / "hexweave.exe", out / "STOP"
     if not config["resume"]:
-        if checkpoints.exists() and any(checkpoints.iterdir()):
-            raise SystemExit(f"{checkpoints} is not empty; set resume or choose a new out")
+        for held in (checkpoints, out / "best"):
+            if held.exists() and any(held.iterdir()):
+                raise SystemExit(f"{held} is not empty; set resume or choose a new out")
         if binary.exists():
             raise SystemExit(f"{binary} is pinned by an earlier launch; set resume or choose a new out")
     if stop.exists() and not clear_stop:
