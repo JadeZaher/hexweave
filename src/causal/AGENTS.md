@@ -55,6 +55,14 @@ is read by window from disk, so memory stays flat however large it grows. Its
 evaluation is teacher-forced held-out bits per byte over 16 fixed spans of 128
 bytes in both forward modes on the same weights (`dev_*` for the run's mode,
 `alternate_*` for the other), plus greedy continuations of four story openings.
+`train_frozen_*` scores four fixed train spans the same frozen-weight way, run's
+mode only: a generalization-gap monitor separating online adaptation during
+training (prequential train loss scored on weights that just adapted to the
+current story) from unrepresentative held-out spans. Both run `score_spans`,
+which steps only the warm-up and scored positions of each slice; the bytes
+before them are prefix context. `replay_contracts` pins its f64 result on a
+fixed probe: if that moves, evaluation numerics changed, and logged numbers
+from earlier commits must be re-scored before they are compared.
 
 Forward mode: `float_forward: true` (a `Knobs` field, so part of the identity;
 absent means ternary) makes every weight product read the matrix's f32 latent
@@ -124,6 +132,36 @@ distribution, not bits: the harness rebuilds State (empty history) every 1,600
 anchors and the core path does not. Logs go to `out/log.jsonl` (lines after the last checkpoint repeat
 after a resume), the summary to `out/report.json`. End a run with `out/STOP`
 (final checkpoint) or the wall deadline, not by killing the trainer.
+
+Evaluation and generation replay history from the actual next byte (generation:
+the byte it just emitted) through `replay::Replay`, matching training's own
+anchor schedule (two-anchor window, weights frozen; `replay_contracts`), instead
+of the zero history teacher forcing used before; this costs one extra backward
+(gather) pass per evaluated byte (about 3x evaluation cost). Drill evaluation
+(`tuning_measure`) is deliberately unchanged, since it must stay identical to
+the validated harness evaluation it is pinned against.
+
+## Telemetry
+
+`telemetry.rs` keeps one thread-local interval of phase wall time and realized
+training routes. `core_train::record` drains it into each `log.jsonl` line under
+`telemetry` and resets it. Nothing is persisted, hashed or part of the run
+identity, so it cannot change numerics, checkpoints or resume; the first line
+after a resume covers only the resumed interval. Phases are disjoint call sites:
+`data` (prefix bytes, anchor target), `prefix` (embedding the window),
+`forward` (`forward_path`), `gather` (route backward), `tile_backward` and
+`tile_apply` (per unique tile: parameter gradients, then the update rule, latent
+Adam on the core path), `shared_apply` (tied E), `records` (predictor and
+history) and `checkpoint` (rotation and best keep). `unattributed` is the
+training wall minus their sum (counters, pruning, timer overhead). `evaluate`
+runs outside that wall and is reported beside it. Never nest `time`, or
+`unattributed` goes negative; the contract test checks it is non-negative.
+Routes count training anchors only: visits per (depth, tile), anchors touching
+each tile (that interval's tile commits), route lengths, distinct routes and
+the eight most frequent. `execution::START_TILE` is the single entry tile for
+training, evaluation and generation. Each log line also carries `latent_steps`
+(`tuning::steps`): per-tile max latent Adam step plus tied E's, under the core
+path's latent update rule.
 
 ## Separate owned retained-text assay
 

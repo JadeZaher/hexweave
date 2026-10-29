@@ -1,11 +1,12 @@
 //! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
-use super::core_corpus::{window_before, Corpus, END};
+use super::core_corpus::{window_before, Corpus, END, SPAN_BYTES, SPAN_WARMUP};
 use super::data::Dataset;
 use super::evaluation::{self, Limits, Loss};
 use super::execution::forward_path;
 use super::generation::{self, Terminal};
+use super::replay::Replay;
 use super::resident::ResidentStore;
 use super::state::State;
 use super::tuning;
@@ -13,8 +14,9 @@ use super::tuning_measure;
 use anyhow::Result;
 use serde_json::{json, Value};
 
+/// Held-out probe spans; `SPAN_BYTES`/`SPAN_WARMUP` (shared with the frozen-train probes) live in
+/// `core_corpus` beside the file reads they also size.
 const HELDOUT_SPANS: usize = 16;
-const HELDOUT_SPAN: usize = 128;
 const STORY_PROMPTS: [&str; 4] = [
     "Once upon a time",
     "One day, a little girl named Lily",
@@ -27,7 +29,8 @@ fn per_byte(loss: &Loss) -> f64 {
 }
 
 /// Held-out bits per byte under both forward modes on the same weights (the run's own mode and,
-/// as `alternate`, the other), plus greedy continuations of story openings in the run's mode.
+/// as `alternate`, the other), the frozen-train generalization-gap probe in the run's mode only,
+/// plus greedy continuations of story openings in the run's mode.
 pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<Value> {
     let float = tuning::current().float_forward;
     let (own, targets) = heldout_nll(state, store, corpus)?;
@@ -35,6 +38,7 @@ pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) 
     let alternate = heldout_nll(state, store, corpus);
     tuning::set_float_forward(float);
     let (alternate, _) = alternate?;
+    let (train_frozen, train_frozen_targets) = train_frozen_nll(state, store, corpus)?;
     let mut never = || -> Result<Option<Terminal>> { Ok(None) };
     let mut samples = Vec::with_capacity(STORY_PROMPTS.len());
     for prompt in STORY_PROMPTS {
@@ -50,33 +54,82 @@ pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) 
         "dev_nll_per_byte": own, "dev_bits_per_byte": bits(own), "forward": mode(float),
         "alternate_forward": mode(!float), "alternate_bits_per_byte": bits(alternate),
         "heldout_targets": targets, "samples": samples,
+        "train_frozen_nll_per_byte": train_frozen, "train_frozen_bits_per_byte": bits(train_frozen),
+        "train_frozen_targets": train_frozen_targets,
     }))
+}
+
+/// Mean teacher-forced NLL (nats per byte) over self-contained spans, replayed with frozen
+/// weights: the last `scored` bytes are tallied after `SPAN_WARMUP` unscored positions; bytes
+/// before those are prefix context only. Shared by the held-out and frozen-train probes.
+pub(super) fn score_spans(
+    state: &State,
+    store: &mut ResidentStore,
+    spans: &[(&[u8], usize)],
+    window: usize,
+) -> Result<(f64, u64)> {
+    let (mut nll, mut targets) = (0.0f64, 0u64);
+    for &(span, scored) in spans {
+        let mut replay = Replay::default();
+        let warmup_end = span.len() - scored;
+        for t in warmup_end.saturating_sub(SPAN_WARMUP)..span.len() {
+            let prefix = state.shared.prefix(&window_before(span, t, window))?;
+            let history = replay.input(state)?;
+            let trace = forward_path(
+                store,
+                state.geometry,
+                &prefix,
+                history,
+                &mut None,
+                state.tile_versions,
+            )?;
+            let loss = replay.observe(state, store, &prefix, &trace, span[t])?;
+            if t >= warmup_end {
+                nll += f64::from(loss);
+                targets += 1;
+            }
+        }
+    }
+    Ok((nll / targets.max(1) as f64, targets))
 }
 
 /// Mean held-out NLL (nats per byte) over fixed spans under the installed forward mode.
 fn heldout_nll(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<(f64, u64)> {
     let heldout = &corpus.heldout;
     let stride = heldout.len() / HELDOUT_SPANS;
-    let (mut nll, mut targets) = (0.0f64, 0u64);
-    for span in 0..HELDOUT_SPANS {
-        for t in span * stride..(span * stride + HELDOUT_SPAN).min(heldout.len()) {
-            let prefix = state
-                .shared
-                .prefix(&window_before(heldout, t, corpus.window))?;
-            let width = state.geometry.width;
-            let trace = forward_path(
-                store,
-                state.geometry,
-                &prefix,
-                vec![0.0; width],
-                &mut None,
-                state.tile_versions,
-            )?;
-            nll += f64::from(state.shared.readout(&trace.output)?.loss(heldout[t])?);
-            targets += 1;
-        }
-    }
-    Ok((nll / targets.max(1) as f64, targets))
+    let bounds: Vec<(usize, usize)> = (0..HELDOUT_SPANS)
+        .map(|span| {
+            (
+                span * stride,
+                (span * stride + SPAN_BYTES).min(heldout.len()),
+            )
+        })
+        .collect();
+    let spans: Vec<(&[u8], usize)> = bounds
+        .iter()
+        .map(|&(begin, end)| {
+            let left = begin
+                .saturating_sub(SPAN_WARMUP)
+                .saturating_sub(corpus.window);
+            (&heldout[left..end], end - begin)
+        })
+        .collect();
+    score_spans(state, store, &spans, corpus.window)
+}
+
+/// Mean frozen-weight NLL (nats per byte) on the fixed train spans (`Corpus::open`), run's own
+/// forward mode only: a generalization-gap monitor against the held-out NLL above.
+fn train_frozen_nll(
+    state: &State,
+    store: &mut ResidentStore,
+    corpus: &Corpus,
+) -> Result<(f64, u64)> {
+    let spans: Vec<(&[u8], usize)> = corpus
+        .train_frozen
+        .iter()
+        .map(|(span, scored)| (span.as_slice(), *scored))
+        .collect();
+    score_spans(state, store, &spans, corpus.window)
 }
 
 /// Public dev-set assessment (teacher-forced NLL plus greedy JSON answers) and train samples.

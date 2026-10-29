@@ -16,6 +16,7 @@ use super::execution::{self, TrainingSource};
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
+use super::telemetry::{self, Phase};
 use super::tuning;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
@@ -94,6 +95,15 @@ impl Marks {
     }
 }
 
+/// Per-tile max latent Adam step (index 0..TILES) plus tied E's step (index TILES).
+fn latent_steps() -> Vec<u64> {
+    let mut steps = vec![0u64; super::geometry::TILES + 1];
+    for ((owner, _), step) in tuning::steps() {
+        steps[owner] = steps[owner].max(step);
+    }
+    steps
+}
+
 fn record(
     log: &mut std::fs::File,
     state: &State,
@@ -104,12 +114,13 @@ fn record(
 ) -> Result<Value> {
     let trained = state.counters.anchors - marks.anchors;
     let seconds = marks.at.elapsed().as_secs_f64();
-    let evaluation = evaluate(state, store)?;
+    let evaluation = telemetry::time(Phase::Evaluate, || evaluate(state, store))?;
     let line = json!({
         "anchors": state.global_opportunity, "epoch": state.cursor.epoch,
         "train_loss": (state.counters.anchor_loss_sum - marks.loss) / trained.max(1) as f64,
         "anchors_per_second": trained as f64 / seconds.max(1e-9),
         "elapsed_seconds": started.elapsed().as_secs_f64(), "eval": evaluation,
+        "telemetry": telemetry::drain(seconds), "latent_steps": latent_steps(),
     });
     writeln!(log, "{line}")?;
     log.flush()?;
@@ -196,7 +207,9 @@ fn drive<S: TrainingSource>(
         execution::step(&mut state, &mut store, source, false)?;
         let n = state.global_opportunity;
         if n.is_multiple_of(config.checkpoint_every) {
-            checkpoint(config, source, &state, &store, &identity)?;
+            telemetry::time(Phase::Checkpoint, || {
+                checkpoint(config, source, &state, &store, &identity)
+            })?;
         }
         last = if n.is_multiple_of(config.eval_every) {
             Some(record(
@@ -206,13 +219,17 @@ fn drive<S: TrainingSource>(
             None
         };
         if let Some(line) = &last {
-            core_best::keep(&config.out, &state, &store, &identity, line, &mut best);
+            telemetry::time(Phase::Checkpoint, || {
+                core_best::keep(&config.out, &state, &store, &identity, line, &mut best)
+            });
         }
     };
     let n = state.global_opportunity;
     let checkpoint = match core_checkpoint::latest(&config.out)? {
         Some(path) if path.ends_with(format!("a{n:012}")) => path,
-        _ => checkpoint(config, source, &state, &store, &identity)?,
+        _ => telemetry::time(Phase::Checkpoint, || {
+            checkpoint(config, source, &state, &store, &identity)
+        })?,
     };
     let last = match last {
         Some(line) => line,

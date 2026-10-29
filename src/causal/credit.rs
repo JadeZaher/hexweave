@@ -5,6 +5,7 @@ use super::norm;
 use super::shared::Prefix;
 use super::state::{count, State};
 use super::store_api::TileStore;
+use super::telemetry::{self, Phase};
 use super::tile_gradients::TileGradients;
 use crate::topology::Mesh;
 use anyhow::{ensure, Result};
@@ -71,32 +72,41 @@ pub(super) fn anchor<S: TileStore>(
     trace: &Trace,
     target: u8,
 ) -> Result<f32> {
-    let credit = gather(state, store, prefix, trace, target)?;
+    let credit = telemetry::time(Phase::Gather, || {
+        gather(state, store, prefix, trace, target)
+    })?;
     let advantage = credit.loss - state.baseline;
     ensure!(advantage.is_finite(), "invalid route advantage");
     commit_tiles(state, store, prefix, trace, &credit.corrections, advantage)?;
-    let transitions = if let Some(assay) = &mut state.assay {
+    let transitions = telemetry::time(Phase::SharedApply, || {
+        apply_shared(state, &credit.embedding_gradient)
+    })?;
+    count(&mut state.counters.shared_transitions, transitions)?;
+    drop(credit.embedding_gradient);
+    telemetry::time(Phase::Records, || {
+        train_records(state, trace, &credit.corrections, prefix.shared_version)
+    })?;
+    Ok(credit.loss)
+}
+
+/// Apply tied-E credit under the assay ledger, tuned numerics or the pinned rule.
+fn apply_shared(state: &mut State, gradient: &[f32]) -> Result<usize> {
+    if let Some(assay) = &mut state.assay {
         let metrics = super::assay_update::apply(
             &mut state.shared,
-            &credit.embedding_gradient,
+            gradient,
             assay.rule,
             state.seed,
             state.counters.anchors,
         )?;
         let transitions = usize::try_from(metrics.transitions)?;
         assay.embedding.add(&metrics)?;
-        transitions
-    } else if let Some(moved) =
-        super::assay_update::tuned(&mut state.shared, &credit.embedding_gradient)?
-    {
-        usize::try_from(moved)?
+        Ok(transitions)
+    } else if let Some(moved) = super::assay_update::tuned(&mut state.shared, gradient)? {
+        Ok(usize::try_from(moved)?)
     } else {
-        state.shared.apply(&credit.embedding_gradient)?
-    };
-    count(&mut state.counters.shared_transitions, transitions)?;
-    drop(credit.embedding_gradient);
-    train_records(state, trace, &credit.corrections, prefix.shared_version)?;
-    Ok(credit.loss)
+        state.shared.apply(gradient)
+    }
 }
 
 /// Aggregate repeated visits in forward order, then commit each unique tile once.
@@ -115,25 +125,28 @@ fn commit_tiles<S: TileStore>(
         let (transitions, version) = store.update(id, |tile| {
             checked_tile(tile, state.geometry, id, trace.tile_versions[id])?;
             let mut gradient = TileGradients::zeros(state.geometry, id)?;
-            for (frame, correction) in trace.frames.iter().zip(corrections) {
-                if frame.tile_id != id {
-                    continue;
+            telemetry::time(Phase::TileBackward, || -> Result<()> {
+                for (frame, correction) in trace.frames.iter().zip(corrections) {
+                    if frame.tile_id != id {
+                        continue;
+                    }
+                    ensure!(
+                        frame.version == tile.version,
+                        "repeated visit changed frozen version"
+                    );
+                    tile.backward(
+                        &frame.input,
+                        &prefix.memory,
+                        &trace.history,
+                        correction,
+                        None,
+                        Some(&mut gradient),
+                        frame.action.map(|action| (action, advantage)),
+                    )?;
                 }
-                ensure!(
-                    frame.version == tile.version,
-                    "repeated visit changed frozen version"
-                );
-                tile.backward(
-                    &frame.input,
-                    &prefix.memory,
-                    &trace.history,
-                    correction,
-                    None,
-                    Some(&mut gradient),
-                    frame.action.map(|action| (action, advantage)),
-                )?;
-            }
-            let transitions = tile.apply(&gradient)?;
+                Ok(())
+            })?;
+            let transitions = telemetry::time(Phase::TileApply, || tile.apply(&gradient))?;
             Ok((transitions, tile.version))
         })?;
         state.tile_versions[id] = version;
@@ -143,12 +156,15 @@ fn commit_tiles<S: TileStore>(
     Ok(())
 }
 
-fn train_records(
-    state: &mut State,
+/// One history record per visited frame: its predictor features and unit-clipped correction,
+/// stamped with the trace's versions and the clock `opportunity`. Shared by training and replay.
+pub(super) fn records(
+    state: &State,
     trace: &Trace,
     corrections: &[Vec<f32>],
     shared_version: u64,
-) -> Result<()> {
+    opportunity: u64,
+) -> Result<Vec<Record>> {
     let mesh = Mesh::new(1)?;
     let mut records = Vec::with_capacity(trace.frames.len());
     for (index, frame) in trace.frames.iter().enumerate() {
@@ -161,16 +177,31 @@ fn train_records(
             state
                 .predictor
                 .features(&frame.input, output, &trace.history, point.q, point.r)?;
-        let correction = norm::unit_clip(&corrections[index])?;
         records.push(Record {
             features,
-            correction,
+            correction: norm::unit_clip(&corrections[index])?,
             tile_versions: trace.tile_versions,
             shared_version,
-            opportunity: state.numerical_clock()?,
+            opportunity,
             tile_id: frame.tile_id,
         });
     }
+    Ok(records)
+}
+
+fn train_records(
+    state: &mut State,
+    trace: &Trace,
+    corrections: &[Vec<f32>],
+    shared_version: u64,
+) -> Result<()> {
+    let records = records(
+        state,
+        trace,
+        corrections,
+        shared_version,
+        state.numerical_clock()?,
+    )?;
     let pairs: Vec<_> = records
         .iter()
         .map(|r| (r.features.as_slice(), r.correction.as_slice()))

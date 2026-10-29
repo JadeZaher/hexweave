@@ -1,7 +1,7 @@
 # Hexweave status
 
-Updated 2026-10-27 America/Denver. **The core training path is implemented and
-is the build; two runs are in progress. No useful-assistant result or finite
+Updated 2026-10-28 America/Denver. **The core training path is implemented and
+is the build; no run is in progress. No useful-assistant result or finite
 training ETA is established.**
 
 ## Implemented
@@ -13,6 +13,7 @@ training ETA is established.**
 | Checkpoints | Hash-manifested and fsynced, newest three kept. Resume identity-checks every readable manifest first, is bit exact, quarantines integrity failures and refuses to restart from anchor 0 when every checkpoint fails. Checkpoints from the `8e7a0eb` binary (earlier identity formula, earlier resume logic) resume only with their pinned `out/bin` copy |
 | Data | `science`: pinned QA dataset, development-split evaluation. `drill` v2: the assay curriculum re-dealt to the harness `Shuffled` stream, with key-swap and attention probes |
 | Drill v2 harness parity | `core_contracts`: 12 production-drill anchors equal the validated tuning harness bit for bit, and the drill stream equals `Shuffled` across cycle boundaries |
+| Evaluation and telemetry | Held-out, teacher-forced science and generation replay history like training (`replay.rs`); drill evaluation stays harness-identical. Each log line carries per-phase wall time and per-tile route counts (`telemetry.rs`) |
 | Software fixtures | FP32 `smoke`, allocation-free `plan` (tiny, 81M, 287M), `causal plan`, ternary scalar/AVX2 kernels with parity tests |
 
 Design and invariants: [core path](../src/causal/AGENTS.md) and
@@ -67,9 +68,28 @@ training fit has been measured.
   latents read as f32 scored 3.015 (+0.25). A byte 5-gram trained on the same
   bytes scores 1.68 (1 MB) and 1.59 (2 MB). Greedy story continuations loop on
   single letters. Training (prequential, no byte seen twice) logged 2.19-2.25
-  bits/byte versus 2.67-2.76 held-out: evaluation and generation pass zero
-  history where training uses the previous step's corrections, the likeliest
-  cause of that gap; history-consistent evaluation is not yet implemented.
+  bits/byte versus 2.67-2.76 held-out. These held-out numbers passed zero
+  history, as did every evaluation logged before history replay.
+- `work/core-runs/rescore-float` and `rescore-ternary` (the two best states
+  above, evaluated once with history replay): 2.6166 bits/byte (f32; 2.612
+  zero-history) and 2.6226 (ternary; 2.623). Alternate modes: 2.660 (f32 read
+  as trits; 2.681) and 2.972 (ternary latents read as f32; 3.015). Replay
+  costs a backward pass per evaluated byte and leaves held-out within 0.005,
+  so history does not explain the ~0.4-0.5 bit train/held-out gap. Frozen
+  weights score 2.791 (f32) and 2.941 (ternary) bits/byte on four fixed
+  128-byte train spans (`train_frozen_*`, `rescore-*-3`), above held-out
+  rather than near the 2.2 training loss: the held-out spans are not the
+  harder sample. The low training loss comes from scoring each byte right after
+  updates on the same story (online adaptation), which frozen evaluation does
+  not get. Four spans are a small sample. Greedy continuations still loop.
+- `work/core-runs/profile-telemetry` (TinyStories, window 512, ternary, 3,000
+  anchors, peak 96 MB): ~21 ms per anchor at 48 anchors/s. Latent Adam apply
+  27%, per-tile backward 21%, route backward (`gather`) 19%, predictor and
+  history 13%, forward 10%, window embedding 7%, everything else ~3%;
+  evaluation 27-31 s each. Greedy routing collapsed onto tiles 3, 1, 4 by
+  2,000 anchors (`[3,1,4]` on 986 of the last 1,000; tile 5 never updated;
+  tiles 0, 2 and 6 about 1%). Adding tiles cannot add capacity until routing
+  uses them.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 

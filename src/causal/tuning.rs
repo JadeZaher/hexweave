@@ -200,6 +200,16 @@ pub(super) fn ripple_latents(matrices: &[((usize, usize), &TernaryMatrix)]) -> R
     Ok(())
 }
 
+/// Each tracked latent's Adam step count, keyed like `LATENTS`; no weight or moment data copied.
+pub(super) fn steps() -> Vec<((usize, usize), u64)> {
+    LATENTS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .map(|(&key, latent)| (key, latent.step))
+            .collect()
+    })
+}
+
 /// Copy of the latent state and draw counter, for checkpoints.
 pub(super) fn export() -> (Latents, u64) {
     let latents = LATENTS.with(|cell| {

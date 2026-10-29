@@ -4,10 +4,14 @@ use super::geometry::{Geometry, TILES, VISITS};
 use super::shared::Prefix;
 use super::state::{count, Boundary, State};
 use super::store_api::TileStore;
+use super::telemetry::{self, Phase};
 use super::tile::Tile;
 use super::tile_gradients::TileGradients;
 use crate::topology::Mesh;
 use anyhow::{ensure, Context, Result};
+
+/// Every route enters the mesh here: training, evaluation and generation alike.
+pub(super) const START_TILE: usize = 3;
 
 pub(super) trait TrainingSource {
     fn validate(&self, cursor: &Cursor) -> Result<()>;
@@ -70,7 +74,7 @@ pub(super) fn forward_path<S: TileStore>(
     versions: [u64; TILES],
 ) -> Result<Trace> {
     let mesh = Mesh::new(1)?;
-    let (mut id, mut input) = (3, prefix.initial(geometry).to_vec());
+    let (mut id, mut input) = (START_TILE, prefix.initial(geometry).to_vec());
     let mut frames = Vec::with_capacity(VISITS);
     for depth in 0..VISITS {
         let (forward, action) = store.read(id, |tile| {
@@ -124,8 +128,8 @@ pub(super) fn step<S: TileStore, D: TrainingSource>(
         .global_opportunity
         .checked_add(1)
         .context("opportunity overflow")?;
-    let bytes = source.pending_prefix(&state.cursor)?;
-    let prefix = state.shared.prefix(&bytes)?;
+    let bytes = telemetry::time(Phase::Data, || source.pending_prefix(&state.cursor))?;
+    let prefix = telemetry::time(Phase::Prefix, || state.shared.prefix(&bytes))?;
     drop(bytes);
     state.boundary = Boundary::InFlight;
     let result = complete(state, store, source, &prefix, next);
@@ -155,16 +159,20 @@ fn complete<S: TileStore, D: TrainingSource>(
     prune(state)?;
     let loss = if state.anchors_only() || opportunity.is_multiple_of(4) {
         let history = state.history.mean(state.geometry)?;
-        let trace = forward_path(
-            store,
-            state.geometry,
-            prefix,
-            history,
-            &mut random,
-            state.tile_versions,
-        )?;
+        let versions = state.tile_versions;
+        let trace = telemetry::time(Phase::Forward, || {
+            forward_path(
+                store,
+                state.geometry,
+                prefix,
+                history,
+                &mut random,
+                versions,
+            )
+        })?;
+        telemetry::route(&trace);
         record_trace(state, &trace)?;
-        let target = source.anchor_target(&state.cursor)?;
+        let target = telemetry::time(Phase::Data, || source.anchor_target(&state.cursor))?;
         let loss = credit::anchor(state, store, prefix, &trace, target.byte)?;
         count(&mut state.counters.anchors, 1)?;
         count(&mut state.counters.anchor_prefix_bytes, prefix.bytes.len())?;
@@ -223,7 +231,7 @@ fn local<S: TileStore>(
         state.counters.predictor(update, true)?;
     }
     let mesh = Mesh::new(1)?;
-    let (mut id, mut input, mut seen) = (3, prefix.initial(state.geometry).to_vec(), 0u8);
+    let (mut id, mut input, mut seen) = (START_TILE, prefix.initial(state.geometry).to_vec(), 0u8);
     for depth in 0..VISITS {
         prune(state)?;
         let history = state.history.mean(state.geometry)?;

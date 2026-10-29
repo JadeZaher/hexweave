@@ -1,5 +1,6 @@
 use super::execution::{forward_path, Trace};
 use super::immutable;
+use super::replay::Replay;
 use super::state::{count, State};
 use super::store_api::TileStore;
 use anyhow::{ensure, Result};
@@ -101,23 +102,26 @@ pub(super) fn generate<S: TileStore, F: FnMut() -> Result<Option<Terminal>>>(
     let mut raw_bytes = Vec::with_capacity(maximum_new_bytes);
     let mut routes = Routes::default();
     let mut stop_reason = Reason::ByteBudget;
+    let mut replay = Replay::default();
     for _ in 0..maximum_new_bytes {
         if let Some(status) = poll()? {
             stop_reason = Reason::Interrupted(status);
             break;
         }
         let prefix = state.shared.prefix(&visible)?;
+        let history = replay.input(state)?;
         let trace = forward_path(
             store,
             state.geometry,
             &prefix,
-            vec![0.0; state.geometry.width],
+            history,
             &mut None,
             state.tile_versions,
         )?;
         routes.include(&trace, state)?;
         let readout = state.shared.readout(&trace.output)?;
         let byte = u8::try_from(lowest_maximum(&readout.logits)?)?;
+        replay.observe(state, store, &prefix, &trace, byte)?;
         raw_bytes.push(byte);
         visible.push(byte);
         if byte == b'\n' {

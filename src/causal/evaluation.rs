@@ -4,6 +4,7 @@ use super::execution::forward_path;
 use super::generation::{self, Generation, Reason, Terminal};
 use super::geometry::Geometry;
 use super::immutable;
+use super::replay::Replay;
 use super::state::{count, State};
 use super::storage_paths::digest;
 use super::store_api::TileStore;
@@ -148,6 +149,7 @@ fn teacher<S: TileStore, F: FnMut() -> Result<Option<Terminal>>>(
     for row_index in 0..dataset.len() {
         let row = dataset.record(row_index)?;
         let mut visible = row.prompt;
+        let mut replay = Replay::default();
         for (offset, &target) in row.completion.iter().enumerate() {
             if let Some(status) = poll()? {
                 return Ok((losses, row_index, Coverage::Interrupted(status)));
@@ -156,15 +158,16 @@ fn teacher<S: TileStore, F: FnMut() -> Result<Option<Terminal>>>(
                 return Ok((losses, row_index, Coverage::Limit));
             }
             let prefix = state.shared.prefix(&visible)?;
+            let history = replay.input(state)?;
             let trace = forward_path(
                 store,
                 state.geometry,
                 &prefix,
-                vec![0.0; state.geometry.width],
+                history,
                 &mut None,
                 state.tile_versions,
             )?;
-            let loss = state.shared.readout(&trace.output)?.loss(target)?;
+            let loss = replay.observe(state, store, &prefix, &trace, target)?;
             losses.add(loss, row.masks.kind(offset))?;
             visible.push(target);
         }

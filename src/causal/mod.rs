@@ -39,6 +39,7 @@ mod positions;
 mod predictor;
 mod predictor_joint;
 mod pulse;
+mod replay;
 mod resident;
 mod routing;
 mod shared;
@@ -47,6 +48,7 @@ mod state_codec;
 mod state_counters;
 mod storage_paths;
 mod store_api;
+mod telemetry;
 mod tile;
 mod tile_gradients;
 mod tuning;
@@ -78,6 +80,8 @@ mod generation_contracts;
 mod numerical_tests;
 #[cfg(test)]
 mod parameter_contracts;
+#[cfg(test)]
+mod replay_contracts;
 #[cfg(test)]
 mod tuning_harness;
 
