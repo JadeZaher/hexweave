@@ -44,6 +44,8 @@ struct Interval {
     anchors_per_tile: [u64; TILES],
     lengths: [u64; VISITS],
     routes: BTreeMap<Vec<usize>, u64>,
+    history_sum: u64,
+    history_count: u64,
 }
 
 thread_local! {
@@ -57,6 +59,15 @@ pub(super) fn time<T>(phase: Phase, work: impl FnOnce() -> T) -> T {
     let seconds = started.elapsed().as_secs_f64();
     INTERVAL.with(|cell| cell.borrow_mut().seconds[phase as usize] += seconds);
     result
+}
+
+/// Record the history records present at one training anchor's forward pass (right after prune).
+pub(super) fn history(len: usize) {
+    INTERVAL.with(|cell| {
+        let interval = &mut *cell.borrow_mut();
+        interval.history_sum += len as u64;
+        interval.history_count += 1;
+    });
 }
 
 /// Count one training anchor's realized route.
@@ -94,6 +105,8 @@ pub(super) fn drain(wall: f64) -> Value {
         .take(TOP_ROUTES)
         .map(|(tiles, anchors)| json!({"tiles": tiles, "anchors": anchors}))
         .collect();
+    let history_len = (interval.history_count > 0)
+        .then(|| interval.history_sum as f64 / interval.history_count as f64);
     json!({
         "seconds": seconds,
         "anchors": interval.lengths.iter().sum::<u64>(),
@@ -102,6 +115,7 @@ pub(super) fn drain(wall: f64) -> Value {
         "route_lengths": interval.lengths,
         "distinct_routes": interval.routes.len(),
         "top_routes": top,
+        "history_len": history_len,
     })
 }
 
@@ -114,6 +128,7 @@ mod fixture;
 mod tests {
     use super::super::execution::{self, START_TILE};
     use super::super::geometry::Geometry;
+    use super::super::history::HISTORY_CAP;
     use super::super::state::State;
     use super::fixture::{Source, Store};
     use super::*;
@@ -139,6 +154,13 @@ mod tests {
             state.counters.visits
         );
         assert_eq!(by_depth[0][START_TILE], 6);
+        assert!(
+            report["history_len"]
+                .as_f64()
+                .is_some_and(|value| value > 0.0 && value <= HISTORY_CAP as f64),
+            "history_len is a mean over anchors including the empty first one, at most the cap: {}",
+            report["history_len"]
+        );
         let seconds = &report["seconds"];
         for phase in ["forward", "tile_backward", "tile_apply"] {
             assert!(

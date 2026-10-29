@@ -9,7 +9,8 @@ use super::state::State;
 use super::store_api::TileStore;
 use anyhow::Result;
 
-/// Training's clock advances four ticks per anchor; records live for two anchors.
+/// Training's clock advances four ticks per anchor; records live for up to two anchors --
+/// training keeps the older anchor only when no trit flipped in between.
 const TICKS_PER_ANCHOR: u64 = 4;
 
 #[derive(Default)]

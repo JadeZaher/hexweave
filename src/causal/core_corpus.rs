@@ -19,13 +19,11 @@ pub(super) const START: u8 = 0x02;
 /// Story terminator written by `scripts/prepare_corpus.py`.
 pub(super) const END: u8 = 0x03;
 const HELDOUT_CAP: u64 = 64 << 20;
-/// Bytes scored per frozen-weight span and warm-up positions before it; shared by the held-out
-/// and frozen-train spans (`core_eval::heldout_nll`/`train_frozen_nll`) so both replay the same
-/// window shape.
+/// Bytes scored per frozen-weight span, and warm-up positions before it; see AGENTS.md §core.
 pub(super) const SPAN_BYTES: usize = 128;
 pub(super) const SPAN_WARMUP: usize = 2;
-/// Evenly spaced frozen-train probes; few enough to keep `Corpus` memory flat.
-const TRAIN_FROZEN_SPANS: u64 = 4;
+/// Scored anchors in the train-ahead probes; see AGENTS.md §core.
+pub(super) const AHEAD_ANCHORS: u64 = 512;
 
 #[derive(Deserialize)]
 struct Entry {
@@ -40,14 +38,12 @@ struct Manifest {
     files: BTreeMap<String, Entry>,
 }
 
-/// Pinned train stream (read by window), in-memory held-out bytes, and a few KB of frozen-train
-/// probe spans (`train_frozen`: span bytes, scored-byte count) read once at `open`.
+/// Pinned train stream (read by window), and in-memory held-out bytes.
 pub(super) struct Corpus {
     train: File,
     length: u64,
     pub heldout: Vec<u8>,
     pub window: usize,
-    pub train_frozen: Vec<(Vec<u8>, usize)>,
     identity: DataIdentity,
 }
 
@@ -79,26 +75,6 @@ fn read_at(file: &File, start: u64, end: u64) -> Result<Vec<u8>> {
     handle.seek(SeekFrom::Start(start))?;
     handle.read_exact(&mut bytes)?;
     Ok(bytes)
-}
-
-/// Four evenly spaced frozen-train probes: each span is `[left, end)`, where `end` scores
-/// `SPAN_BYTES` train bytes (clipped at the file end) and `left` backs up `SPAN_WARMUP` replay
-/// warm-up positions plus the model's own `window` of look-back context, clipped at the file
-/// start exactly as `window_before` clips there. See AGENTS.md §core.
-fn train_frozen_spans(train: &File, length: u64, window: usize) -> Result<Vec<(Vec<u8>, usize)>> {
-    let stride = length / TRAIN_FROZEN_SPANS;
-    (0..TRAIN_FROZEN_SPANS)
-        .map(|span| {
-            let (begin, end) = (
-                span * stride,
-                (span * stride + SPAN_BYTES as u64).min(length),
-            );
-            let left = begin
-                .saturating_sub(SPAN_WARMUP as u64)
-                .saturating_sub(window as u64);
-            Ok((read_at(train, left, end)?, usize::try_from(end - begin)?))
-        })
-        .collect()
 }
 
 impl Corpus {
@@ -143,7 +119,6 @@ impl Corpus {
             (32..=1023).contains(&window),
             "corpus window must be in 32..=1023"
         );
-        let train_frozen = train_frozen_spans(&train, train_entry.bytes, window)?;
         let identity = DataIdentity {
             schema: "byte-corpus-v1".into(),
             manifest_sha256: manifest_sha256.into(),
@@ -160,7 +135,6 @@ impl Corpus {
             length: train_entry.bytes,
             heldout,
             window,
-            train_frozen,
             identity,
         })
     }
@@ -184,6 +158,35 @@ impl Corpus {
     /// Train bytes `[start, end)`.
     fn read(&self, start: u64, end: u64) -> Result<Vec<u8>> {
         read_at(&self.train, start, end)
+    }
+
+    /// `len` (<= length) train bytes from `start`, wrapping once at the file end like
+    /// consecutive train targets do; see AGENTS.md §core.
+    fn wrapped(&self, start: u64, len: u64) -> Result<Vec<u8>> {
+        ensure!(
+            start < self.length && len <= self.length,
+            "ahead span exceeds corpus length"
+        );
+        let end = start + len;
+        if end <= self.length {
+            self.read(start, end)
+        } else {
+            Ok([
+                self.read(start, self.length)?,
+                self.read(0, end - self.length)?,
+            ]
+            .concat())
+        }
+    }
+
+    /// The train-ahead probe span and its scored count, starting at the cursor's current
+    /// position; see AGENTS.md §core.
+    pub fn ahead_span(&self, start: u64, window: usize) -> Result<(Vec<u8>, usize)> {
+        let scored = usize::try_from(AHEAD_ANCHORS.min(self.length))?;
+        let left = start.saturating_sub(SPAN_WARMUP as u64 + window as u64);
+        let before = self.read(left, start)?;
+        let scored_bytes = self.wrapped(start, scored as u64)?;
+        Ok(([before, scored_bytes].concat(), scored))
     }
 }
 

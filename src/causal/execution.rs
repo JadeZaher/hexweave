@@ -158,6 +158,7 @@ fn complete<S: TileStore, D: TrainingSource>(
     let previous_visits = state.counters.visits;
     prune(state)?;
     let loss = if state.anchors_only() || opportunity.is_multiple_of(4) {
+        telemetry::history(state.history.records.len());
         let history = state.history.mean(state.geometry)?;
         let versions = state.tile_versions;
         let trace = telemetry::time(Phase::Forward, || {

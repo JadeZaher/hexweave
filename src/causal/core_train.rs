@@ -3,6 +3,7 @@
 
 use super::assay_source::Source as AssaySource;
 use super::assay_state::MANIFEST_SHA;
+use super::core_ahead::Ahead;
 use super::core_best;
 use super::core_checkpoint::{self, PROTOCOL};
 use super::core_config::{Config, Data};
@@ -49,18 +50,22 @@ pub(super) fn run(path: &Path) -> Result<Value> {
                     inner: &train,
                     seed: config.seed,
                 };
-                drive(&config, &source, start, evaluate)
+                drive(&config, &source, start, evaluate, false)
             } else {
-                drive(&config, &train, start, evaluate)
+                drive(&config, &train, start, evaluate, false)
             }
         }
         Data::Drill { root } => {
             let assay = AssaySource::open(root, MANIFEST_SHA)?;
             let drill = Drill::new(&assay, config.seed)?;
             let start = State::with_cursor(geometry, config.seed, drill.cursor(0)?)?;
-            drive(&config, &drill, start, &mut |state, store| {
-                core_eval::drill(state, store, &assay)
-            })
+            drive(
+                &config,
+                &drill,
+                start,
+                &mut |state, store| core_eval::drill(state, store, &assay),
+                false,
+            )
         }
         Data::Corpus {
             root,
@@ -69,9 +74,13 @@ pub(super) fn run(path: &Path) -> Result<Value> {
         } => {
             let corpus = Corpus::open(root, manifest_sha256, *window)?;
             let start = State::with_cursor(geometry, config.seed, corpus.cursor(0)?)?;
-            drive(&config, &corpus, start, &mut |state, store| {
-                core_eval::corpus(state, store, &corpus)
-            })
+            drive(
+                &config,
+                &corpus,
+                start,
+                &mut |state, store| core_eval::corpus(state, store, &corpus),
+                true,
+            )
         }
     }
 }
@@ -111,6 +120,7 @@ fn record(
     marks: &mut Marks,
     evaluate: &mut Evaluate<'_>,
     started: Instant,
+    ahead: &mut Ahead,
 ) -> Result<Value> {
     let trained = state.counters.anchors - marks.anchors;
     let seconds = marks.at.elapsed().as_secs_f64();
@@ -121,11 +131,25 @@ fn record(
         "anchors_per_second": trained as f64 / seconds.max(1e-9),
         "elapsed_seconds": started.elapsed().as_secs_f64(), "eval": evaluation,
         "telemetry": telemetry::drain(seconds), "latent_steps": latent_steps(),
+        "train_ahead_prequential_bits_per_byte": ahead.take(),
     });
     writeln!(log, "{line}")?;
     log.flush()?;
     *marks = Marks::new(state);
     Ok(line)
+}
+
+/// Feed a just-committed anchor's loss into the train-ahead accumulator (corpus runs only).
+fn feed_ahead(ahead: &mut Ahead, corpus: bool, step: &execution::Step) {
+    if let (
+        true,
+        execution::Step::Committed {
+            loss: Some(loss), ..
+        },
+    ) = (corpus, step)
+    {
+        ahead.add(*loss);
+    }
 }
 
 /// Newest verifying checkpoint when resuming (none: fresh); a fresh run refuses existing checkpoints.
@@ -161,11 +185,41 @@ fn checkpoint<S: TrainingSource>(
     core_checkpoint::save(&config.out, state, store, identity)
 }
 
+/// Ensure the final anchors are checkpointed and logged, saving one more record if needed.
+#[allow(clippy::too_many_arguments)]
+fn finalize_last<S: TrainingSource>(
+    config: &Config,
+    source: &S,
+    state: &State,
+    store: &mut ResidentStore,
+    identity: &str,
+    marks: &mut Marks,
+    evaluate: &mut Evaluate<'_>,
+    started: Instant,
+    ahead: &mut Ahead,
+    log: &mut std::fs::File,
+    last: Option<Value>,
+) -> Result<(PathBuf, Value)> {
+    let n = state.global_opportunity;
+    let path = match core_checkpoint::latest(&config.out)? {
+        Some(path) if path.ends_with(format!("a{n:012}")) => path,
+        _ => telemetry::time(Phase::Checkpoint, || {
+            checkpoint(config, source, state, store, identity)
+        })?,
+    };
+    let last = match last {
+        Some(line) => line,
+        None => record(log, state, store, marks, evaluate, started, ahead)?,
+    };
+    Ok((path, last))
+}
+
 fn drive<S: TrainingSource>(
     config: &Config,
     source: &S,
     start: State,
     evaluate: &mut Evaluate<'_>,
+    corpus: bool,
 ) -> Result<Value> {
     let started = Instant::now();
     ensure!(
@@ -186,10 +240,11 @@ fn drive<S: TrainingSource>(
             .context("wall_seconds overflows the clock")?,
     );
     let mut marks = Marks::new(&state);
+    let mut ahead = Ahead::default();
     let mut best = core_best::best_so_far(&config.out, &identity);
     let mut last = if state.global_opportunity == 0 {
         Some(record(
-            &mut log, &state, &mut store, &mut marks, evaluate, started,
+            &mut log, &state, &mut store, &mut marks, evaluate, started, &mut ahead,
         )?)
     } else {
         None
@@ -204,7 +259,8 @@ fn drive<S: TrainingSource>(
         if Instant::now() >= deadline {
             break "deadline";
         }
-        execution::step(&mut state, &mut store, source, false)?;
+        let step = execution::step(&mut state, &mut store, source, false)?;
+        feed_ahead(&mut ahead, corpus, &step);
         let n = state.global_opportunity;
         if n.is_multiple_of(config.checkpoint_every) {
             telemetry::time(Phase::Checkpoint, || {
@@ -213,7 +269,7 @@ fn drive<S: TrainingSource>(
         }
         last = if n.is_multiple_of(config.eval_every) {
             Some(record(
-                &mut log, &state, &mut store, &mut marks, evaluate, started,
+                &mut log, &state, &mut store, &mut marks, evaluate, started, &mut ahead,
             )?)
         } else {
             None
@@ -224,17 +280,11 @@ fn drive<S: TrainingSource>(
             });
         }
     };
+    let (checkpoint, last) = finalize_last(
+        config, source, &state, &mut store, &identity, &mut marks, evaluate, started, &mut ahead,
+        &mut log, last,
+    )?;
     let n = state.global_opportunity;
-    let checkpoint = match core_checkpoint::latest(&config.out)? {
-        Some(path) if path.ends_with(format!("a{n:012}")) => path,
-        _ => telemetry::time(Phase::Checkpoint, || {
-            checkpoint(config, source, &state, &store, &identity)
-        })?,
-    };
-    let last = match last {
-        Some(line) => line,
-        None => record(&mut log, &state, &mut store, &mut marks, evaluate, started)?,
-    };
     core_best::keep(&config.out, &state, &store, &identity, &last, &mut best);
     let report = json!({
         "protocol": PROTOCOL, "terminal": terminal, "anchors": n, "epoch": state.cursor.epoch,

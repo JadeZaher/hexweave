@@ -239,23 +239,26 @@ fn corpus_stream_reads_windows_and_wraps_epochs() -> Result<()> {
     std::fs::write(root.join("heldout.txt"), &heldout)?;
     std::fs::write(root.join("manifest.json"), &manifest)?;
     let corpus = Corpus::open(&root, &digest(&manifest), 64)?;
-    // Frozen-train probes: window (64) clipped at the file start, plus warm-up, per span.
-    let expected_frozen = [
-        (0usize, 128usize, 128usize),
-        (0, 178, 128),
-        (34, 200, 100),
-        (84, 200, 50),
-    ];
-    assert_eq!(corpus.train_frozen.len(), expected_frozen.len());
-    for (&(left, right, scored), (bytes, got_scored)) in
-        expected_frozen.iter().zip(&corpus.train_frozen)
-    {
-        assert_eq!(*bytes, train[left..right], "frozen span [{left},{right})");
-        assert_eq!(
-            *got_scored, scored,
-            "frozen span [{left},{right}) scored count"
-        );
-    }
+    // Train-ahead probe: its left context clips at the file start (no backward wrap, so
+    // `score_spans`' own window_before call supplies the START sentinel there), and its scored
+    // region wraps once at the file end when it is longer than the remaining file.
+    let (near_start, near_scored) = corpus.ahead_span(10, 64)?;
+    assert_eq!(
+        near_scored, 200,
+        "ahead scores the whole corpus when it is shorter than 512"
+    );
+    assert_eq!(
+        near_start,
+        [&train[..], &train[..10]].concat(),
+        "ahead span near the cursor start has no earlier context to read"
+    );
+    let (wrapped, wrapped_scored) = corpus.ahead_span(190, 64)?;
+    assert_eq!(wrapped_scored, 200);
+    assert_eq!(
+        wrapped,
+        [&train[124..200], &train[..190]].concat(),
+        "ahead span wraps once at the file end"
+    );
     assert_eq!(window_before(&train, 0, 64), [START]);
     assert_eq!(
         window_before(&train, 63, 64),

@@ -11,10 +11,10 @@ use super::resident::ResidentStore;
 use super::state::State;
 use super::tuning;
 use super::tuning_measure;
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 
-/// Held-out probe spans; `SPAN_BYTES`/`SPAN_WARMUP` (shared with the frozen-train probes) live in
+/// Held-out probe spans; `SPAN_BYTES`/`SPAN_WARMUP` (shared with the train-ahead probe) live in
 /// `core_corpus` beside the file reads they also size.
 const HELDOUT_SPANS: usize = 16;
 const STORY_PROMPTS: [&str; 4] = [
@@ -29,8 +29,8 @@ fn per_byte(loss: &Loss) -> f64 {
 }
 
 /// Held-out bits per byte under both forward modes on the same weights (the run's own mode and,
-/// as `alternate`, the other), the frozen-train generalization-gap probe in the run's mode only,
-/// plus greedy continuations of story openings in the run's mode.
+/// as `alternate`, the other), the byte-matched train-ahead generalization-gap probe in the run's
+/// mode only, plus greedy continuations of story openings in the run's mode.
 pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<Value> {
     let float = tuning::current().float_forward;
     let (own, targets) = heldout_nll(state, store, corpus)?;
@@ -38,7 +38,7 @@ pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) 
     let alternate = heldout_nll(state, store, corpus);
     tuning::set_float_forward(float);
     let (alternate, _) = alternate?;
-    let (train_frozen, train_frozen_targets) = train_frozen_nll(state, store, corpus)?;
+    let (ahead, ahead_targets) = train_ahead_nll(state, store, corpus)?;
     let mut never = || -> Result<Option<Terminal>> { Ok(None) };
     let mut samples = Vec::with_capacity(STORY_PROMPTS.len());
     for prompt in STORY_PROMPTS {
@@ -54,14 +54,13 @@ pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) 
         "dev_nll_per_byte": own, "dev_bits_per_byte": bits(own), "forward": mode(float),
         "alternate_forward": mode(!float), "alternate_bits_per_byte": bits(alternate),
         "heldout_targets": targets, "samples": samples,
-        "train_frozen_nll_per_byte": train_frozen, "train_frozen_bits_per_byte": bits(train_frozen),
-        "train_frozen_targets": train_frozen_targets,
+        "train_ahead_frozen_nll_per_byte": ahead, "train_ahead_frozen_bits_per_byte": bits(ahead),
+        "train_ahead_frozen_targets": ahead_targets,
     }))
 }
 
-/// Mean teacher-forced NLL (nats per byte) over self-contained spans, replayed with frozen
-/// weights: the last `scored` bytes are tallied after `SPAN_WARMUP` unscored positions; bytes
-/// before those are prefix context only. Shared by the held-out and frozen-train probes.
+/// Mean teacher-forced NLL (nats per byte) over frozen-weight spans; see AGENTS.md §core for the
+/// warm-up/window convention shared by the held-out and train-ahead probes.
 pub(super) fn score_spans(
     state: &State,
     store: &mut ResidentStore,
@@ -70,6 +69,10 @@ pub(super) fn score_spans(
 ) -> Result<(f64, u64)> {
     let (mut nll, mut targets) = (0.0f64, 0u64);
     for &(span, scored) in spans {
+        ensure!(
+            span.len() >= scored,
+            "scored span shorter than its scored byte count"
+        );
         let mut replay = Replay::default();
         let warmup_end = span.len() - scored;
         for t in warmup_end.saturating_sub(SPAN_WARMUP)..span.len() {
@@ -117,19 +120,16 @@ fn heldout_nll(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Res
     score_spans(state, store, &spans, corpus.window)
 }
 
-/// Mean frozen-weight NLL (nats per byte) on the fixed train spans (`Corpus::open`), run's own
-/// forward mode only: a generalization-gap monitor against the held-out NLL above.
-fn train_frozen_nll(
+/// Mean frozen-weight NLL (nats per byte) on the next `AHEAD_ANCHORS` train bytes ahead of the
+/// cursor (`Corpus::ahead_span`), run's own forward mode only: a byte-matched generalization-gap
+/// monitor against the held-out NLL above and the prequential `train_ahead` loss in `core_train`.
+fn train_ahead_nll(
     state: &State,
     store: &mut ResidentStore,
     corpus: &Corpus,
 ) -> Result<(f64, u64)> {
-    let spans: Vec<(&[u8], usize)> = corpus
-        .train_frozen
-        .iter()
-        .map(|(span, scored)| (span.as_slice(), *scored))
-        .collect();
-    score_spans(state, store, &spans, corpus.window)
+    let (span, scored) = corpus.ahead_span(state.cursor.completion_offset as u64, corpus.window)?;
+    score_spans(state, store, &[(&span, scored)], corpus.window)
 }
 
 /// Public dev-set assessment (teacher-forced NLL plus greedy JSON answers) and train samples.

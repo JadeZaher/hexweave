@@ -58,7 +58,8 @@ fn replay_window_is_two_anchors_and_freezes_weights() -> Result<()> {
     assert_eq!(
         windowed,
         last_two.input(&state)?,
-        "window keeps the last two anchors"
+        "Replay's window keeps up to two anchors; training keeps the older anchor only when no \
+         trit flipped in between"
     );
 
     let mut last_one = Replay::default();
@@ -95,7 +96,9 @@ fn span_scoring_numerics_are_pinned() -> Result<()> {
     assert_eq!(
         nll.to_bits(),
         GOLDEN_SPAN_NLL,
-        "evaluation numerics changed ({nll:?}, bits {:#x}): re-score before trusting comparisons across commits",
+        "evaluation numerics changed ({nll:?}, bits {:#x}): this also moves with training \
+         numerics and the platform's libm (exp/tanh/ln), so re-score before trusting comparisons \
+         across commits, and update the constant only when the change is intended",
         nll.to_bits()
     );
     Ok(())

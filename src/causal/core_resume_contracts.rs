@@ -146,6 +146,16 @@ fn best_checkpoint_selection_survives_repeats_and_ignores_other_runs() -> Result
     assert!(out
         .join("best/checkpoints/a000000000001/manifest.json")
         .exists());
+    std::fs::write(
+        out.join("best/selection.json"),
+        serde_json::to_vec(&json!({ "anchors": 1, "dev_nll_per_byte": 0.1,
+            "identity_sha256": "identity", "eval_version": 1 }))?,
+    )?;
+    assert_eq!(
+        core_best::best_so_far(&out, "identity"),
+        f64::INFINITY,
+        "a selection from an earlier eval version must not be compared against the current one"
+    );
     assert!(core_best::ensure_fresh(&out).is_err());
     std::fs::remove_dir_all(&out)?;
     Ok(())

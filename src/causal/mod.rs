@@ -11,6 +11,7 @@ mod attention_reverse;
 mod checkpoint_state;
 mod child_io;
 mod config;
+mod core_ahead;
 mod core_best;
 mod core_checkpoint;
 mod core_codec;

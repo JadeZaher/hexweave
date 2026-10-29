@@ -8,12 +8,19 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// Lowest dev NLL this run identity recorded; infinity if none, unreadable or another run's.
+/// Bump when evaluation numerics change (2 = history replay) so a selection from an earlier
+/// eval version is never compared against the new NLL scale.
+const EVAL_VERSION: u64 = 2;
+
+/// Lowest dev NLL this run identity recorded at the current eval version; infinity if none,
+/// unreadable, from another run or from an earlier eval version.
 pub(super) fn best_so_far(out: &Path, identity: &str) -> f64 {
     std::fs::read(out.join("best").join("selection.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .filter(|selection| selection["identity_sha256"] == identity)
+        .filter(|selection| {
+            selection["identity_sha256"] == identity && selection["eval_version"] == EVAL_VERSION
+        })
         .and_then(|selection| selection["dev_nll_per_byte"].as_f64())
         .unwrap_or(f64::INFINITY)
 }
@@ -67,8 +74,8 @@ fn try_keep(
     {
         core_checkpoint::save(&root, state, store, identity)?;
     }
-    let selection =
-        json!({ "anchors": anchors, "dev_nll_per_byte": score, "identity_sha256": identity });
+    let selection = json!({ "anchors": anchors, "dev_nll_per_byte": score,
+        "identity_sha256": identity, "eval_version": EVAL_VERSION });
     core_checkpoint::publish(
         &root.join("selection.json"),
         &serde_json::to_vec_pretty(&selection)?,
