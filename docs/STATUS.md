@@ -119,7 +119,12 @@ training fit has been measured.
   an explicit one-anchor window. `history_len` stayed at 3.06-3.18, the route
   length, confirming the one-anchor steady state. The train-ahead pairs at
   60k and 80k show no consistent adaptation effect at this scale. Minor tiles
-  received 9-22% of the start tile's updates in both arms.
+  received 9-22% of the start tile's updates in both arms. Tie-breaker
+  (`rescore-abl-*`, `eval_spans: 128`, 16,384 targets each): on 3.1689 and
+  3.1902, off 3.2288 and 3.2177 at 80k and 100k; mean (off - on) +0.0437,
+  above +0.02, so v2 keeps history as an explicit one-anchor window. A
+  16-span re-score of the on-arm 100k checkpoint reproduced its logged
+  3.3469990231317888 exactly.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 
