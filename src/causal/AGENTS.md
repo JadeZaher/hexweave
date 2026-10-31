@@ -52,9 +52,10 @@ corpus (`scripts/prepare_corpus.py`: stories END-terminated with 0x03, every
 20th held out, SHA-256 manifest). Target n is train byte n mod length, predicted
 from the last `window` (32-1023) bytes of `[START 0x02] + train`; the train file
 is read by window from disk, so memory stays flat however large it grows. Its
-evaluation is teacher-forced held-out bits per byte over 16 fixed spans of 128
-bytes in both forward modes on the same weights (`dev_*` for the run's mode,
-`alternate_*` for the other), plus greedy continuations of four story openings.
+evaluation is teacher-forced held-out bits per byte over `eval_spans` fixed spans
+(a `Config` field, default 16, not part of the run identity) of 128 bytes in both
+forward modes on the same weights (`dev_*` for the run's mode, `alternate_*` for
+the other), plus greedy continuations of four story openings.
 `train_ahead_frozen_*` frozen-scores the next `AHEAD_ANCHORS` (512) train bytes
 ahead of the cursor the same way (`Corpus::ahead_span`, wrapping once at the
 file end for byte selection; the prefix context before it clips at the file
@@ -122,9 +123,12 @@ of `execution::complete` passes a zero vector of `state.history.mean`'s width
 instead of calling it; `credit::anchor` skips `train_records` entirely, so no
 features are built, the predictor never fits and nothing is pushed to
 `History` (the predictor is unused under anchor-only regardless); and
-`replay::Replay::input`/`observe` do the same for evaluation and generation,
-still returning the correct loss from `credit::gather` since that does not
-touch history. A `false` run gets a different run identity (`core_contracts`'s
+`replay::Replay::input` does the same for evaluation and generation. Off,
+`Replay::observe` also skips `credit::gather`'s backward pass entirely (no
+corrections, no records) and returns `Shared::readout(output)?.loss(target)`
+directly -- the same value `gather` computes via `Shared::task`, so the loss
+is unchanged but costs one fewer backward pass per evaluated byte. A `false`
+run gets a different run identity (`core_contracts`'s
 identity table pins both directions) and a different trained loss sequence
 from the same seed, since the forward pass sees different input; see §State
 encoding for the counter invariant this gates.
@@ -144,7 +148,9 @@ atomically (`core_best`): another run's selection is ignored, a fresh run (and
 the owner) refuses a non-empty `out/best`, a better repeat at an anchor that
 already has a best checkpoint only updates the selection, and a failed best
 save is logged, never fatal. `best_so_far` ignores a selection from an earlier
-`EVAL_VERSION` (bumped when evaluation numerics change, e.g. history replay):
+`EVAL_VERSION` (bumped when evaluation numerics change, e.g. history replay) or
+whose stamped `eval_spans` differs from the run's (a selection predating the
+field counts as 16), so held-out samples of different sizes are never compared:
 resuming a run from before `70a4c51` therefore starts a fresh best selection
 from infinity, and since only the newest three best checkpoints are kept, the
 old run's best state can rotate out after three more saves at the new eval

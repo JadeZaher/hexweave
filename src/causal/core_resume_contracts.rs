@@ -134,17 +134,17 @@ fn best_checkpoint_selection_survives_repeats_and_ignores_other_runs() -> Result
     state.anchor_only = true;
     let mut store = ResidentStore::new(geometry, 7)?;
     train(&mut state, &mut store, &drill, 1)?;
-    let mut best = core_best::best_so_far(&out, "identity");
+    let mut best = core_best::best_so_far(&out, "identity", 16);
     for score in [2.0, 1.0, 3.0] {
         let line = json!({ "eval": { "dev_nll_per_byte": score } });
-        core_best::keep(&out, &state, &store, "identity", &line, &mut best);
+        core_best::keep(&out, &state, &store, "identity", &line, &mut best, 16);
     }
     assert_eq!(
         best, 1.0,
         "the better repeat at the same anchor must be kept"
     );
-    assert_eq!(core_best::best_so_far(&out, "identity"), 1.0);
-    assert_eq!(core_best::best_so_far(&out, "other"), f64::INFINITY);
+    assert_eq!(core_best::best_so_far(&out, "identity", 16), 1.0);
+    assert_eq!(core_best::best_so_far(&out, "other", 16), f64::INFINITY);
     assert!(out
         .join("best/checkpoints/a000000000001/manifest.json")
         .exists());
@@ -154,9 +154,19 @@ fn best_checkpoint_selection_survives_repeats_and_ignores_other_runs() -> Result
             "identity_sha256": "identity", "eval_version": 1 }))?,
     )?;
     assert_eq!(
-        core_best::best_so_far(&out, "identity"),
+        core_best::best_so_far(&out, "identity", 16),
         f64::INFINITY,
         "a selection from an earlier eval version must not be compared against the current one"
+    );
+    std::fs::write(
+        out.join("best/selection.json"),
+        serde_json::to_vec(&json!({ "anchors": 1, "dev_nll_per_byte": 0.1,
+            "identity_sha256": "identity", "eval_version": 2, "eval_spans": 128 }))?,
+    )?;
+    assert_eq!(
+        core_best::best_so_far(&out, "identity", 16),
+        f64::INFINITY,
+        "a selection with a different eval_spans must not be compared against the current one"
     );
     assert!(core_best::ensure_fresh(&out).is_err());
     std::fs::remove_dir_all(&out)?;

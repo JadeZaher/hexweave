@@ -76,11 +76,12 @@ pub(super) fn run(path: &Path) -> Result<Value> {
             let corpus = Corpus::open(root, manifest_sha256, *window)?;
             let short = corpus.is_short();
             let start = State::with_cursor(geometry, config.seed, corpus.cursor(0)?)?;
+            let eval_spans = config.eval_spans;
             drive(
                 &config,
                 &corpus,
                 start,
-                &mut |state, store| core_eval::corpus(state, store, &corpus),
+                &mut |state, store| core_eval::corpus(state, store, &corpus, eval_spans),
                 true,
                 short,
             )
@@ -146,7 +147,7 @@ fn drive<S: TrainingSource>(
         state.global_opportunity != 0,
         short,
     );
-    let mut best = core_best::best_so_far(&config.out, &identity);
+    let mut best = core_best::best_so_far(&config.out, &identity, config.eval_spans);
     let mut last = if state.global_opportunity == 0 {
         Some(core_log::record(
             &mut RecordState {
@@ -197,7 +198,15 @@ fn drive<S: TrainingSource>(
         };
         if let Some(line) = &last {
             telemetry::time(Phase::Checkpoint, || {
-                core_best::keep(&config.out, &state, &store, &identity, line, &mut best)
+                core_best::keep(
+                    &config.out,
+                    &state,
+                    &store,
+                    &identity,
+                    line,
+                    &mut best,
+                    config.eval_spans,
+                )
             });
         }
     };
@@ -215,7 +224,15 @@ fn drive<S: TrainingSource>(
         last,
     )?;
     let n = state.global_opportunity;
-    core_best::keep(&config.out, &state, &store, &identity, &last, &mut best);
+    core_best::keep(
+        &config.out,
+        &state,
+        &store,
+        &identity,
+        &last,
+        &mut best,
+        config.eval_spans,
+    );
     let report = json!({
         "protocol": PROTOCOL, "terminal": terminal, "anchors": n, "epoch": state.cursor.epoch,
         "wall_seconds": started.elapsed().as_secs_f64(), "identity_sha256": identity,

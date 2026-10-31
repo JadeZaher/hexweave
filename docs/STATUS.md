@@ -103,6 +103,23 @@ training fit has been measured.
   sets, so usage is run-specific, not a fixed collapse. Exploration (e.g.
   `no_halt`) is a measured experiment to try next, not a fix for a proven
   capacity problem.
+- `work/core-runs/ablation-history-on` and `-off` (TinyStories, window 512,
+  ternary, seed 7, rate 0.003, 100k anchors each, identical byte stream; the
+  off arm sets `history: false`). The pre-registered rule (off within 0.02
+  bits/byte of on at 100k held-out) failed as written: 3.4422 vs 3.3470
+  (+0.095). The 2,048-target held-out score cannot resolve 0.02: it swings
+  0.03-0.15 between consecutive evaluations of one arm, and the arms cross
+  (off better by 0.145 at 40k and 0.110 at 60k, worse at 80k and 100k). The
+  paired prequential loss (20k unseen bytes per interval, same bytes in both
+  arms) is lower with history off in all four intervals, by 0.025-0.13. Off
+  runs 17% faster (54 vs 46 anchors/s) and needs no backward pass at
+  inference. The decision rests on a tie-breaker fixed before it runs:
+  re-score both arms' 80k and 100k checkpoints on 16,384 held-out targets;
+  drop history in v2 if the mean (off - on) is at most +0.02, otherwise keep
+  an explicit one-anchor window. `history_len` stayed at 3.06-3.18, the route
+  length, confirming the one-anchor steady state. The train-ahead pairs at
+  60k and 80k show no consistent adaptation effect at this scale. Minor tiles
+  received 9-22% of the start tile's updates in both arms.
 - `work/core-runs/drill-acceptance` (drill v1, 96,000 anchors): key-blind
   throughout (0/32 flips), superseded by v2's harness curriculum.
 

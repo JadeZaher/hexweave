@@ -33,7 +33,9 @@ impl Replay {
     }
 
     /// Record this position's corrections toward `target`, as training does after each anchor,
-    /// without touching any weight; skipped (loss still returned) when the knob is off.
+    /// without touching any weight. When the knob is off this skips `credit::gather`'s full
+    /// backward pass entirely and returns the same loss straight from the readout (matching
+    /// `Shared::task`, which `gather` would otherwise compute identically).
     pub fn observe<S: TileStore>(
         &mut self,
         state: &State,
@@ -42,18 +44,20 @@ impl Replay {
         trace: &Trace,
         target: u8,
     ) -> Result<f32> {
+        if !tuning::current().history {
+            self.clock += TICKS_PER_ANCHOR;
+            return state.shared.readout(&trace.output)?.loss(target);
+        }
         let credit = credit::gather(state, store, prefix, trace, target)?;
-        if tuning::current().history {
-            let records = credit::records(
-                state,
-                trace,
-                &credit.corrections,
-                prefix.shared_version,
-                self.clock,
-            )?;
-            for record in records {
-                self.history.push(record, state.geometry)?;
-            }
+        let records = credit::records(
+            state,
+            trace,
+            &credit.corrections,
+            prefix.shared_version,
+            self.clock,
+        )?;
+        for record in records {
+            self.history.push(record, state.geometry)?;
         }
         self.clock += TICKS_PER_ANCHOR;
         Ok(credit.loss)

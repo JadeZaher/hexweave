@@ -51,6 +51,14 @@ pub(super) struct Config {
     /// Zero history input, skipping records/predictor training (`tuning::Knobs::history`); absent means on.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub history: bool,
+    /// Held-out probe span count (`core_eval::heldout_nll`); absent means 16. Not part of the run
+    /// identity; stamped in `best/selection.json` so selections at a different sample size are
+    /// never compared (`core_best`).
+    #[serde(
+        default = "default_eval_spans",
+        skip_serializing_if = "is_default_eval_spans"
+    )]
+    pub eval_spans: usize,
 }
 
 fn default_true() -> bool {
@@ -59,6 +67,14 @@ fn default_true() -> bool {
 
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+fn default_eval_spans() -> usize {
+    16
+}
+
+fn is_default_eval_spans(value: &usize) -> bool {
+    *value == default_eval_spans()
 }
 
 impl Config {
@@ -85,6 +101,7 @@ impl Config {
             (1..=32).contains(&self.eval_cases),
             "eval_cases must be in 1..=32"
         );
+        ensure!(self.eval_spans >= 1, "eval_spans must be at least 1");
         if let Data::Corpus { window, .. } = &self.data {
             ensure!(
                 (32..=1023).contains(window),

@@ -4,8 +4,9 @@
 use super::assay_source::Source;
 use super::core_contracts::assay;
 use super::core_drill::Drill;
-use super::execution;
+use super::execution::{self, forward_path};
 use super::geometry::Geometry;
+use super::replay::Replay;
 use super::resident::ResidentStore;
 use super::state::State;
 use super::telemetry;
@@ -83,6 +84,40 @@ fn history_off_skips_records_and_changes_loss_and_identity() -> Result<()> {
         Some(0.0),
         "no anchor may see a history record while the knob is off: {}",
         report_off["history_len"]
+    );
+    Ok(())
+}
+
+/// With history off, `Replay::observe` must skip `credit::gather`'s backward pass entirely and
+/// return exactly `state.shared.readout(&trace.output)?.loss(target)` (the same value `gather`
+/// would have computed via `Shared::task`), bit for bit.
+#[test]
+fn history_off_observe_returns_readout_loss_bit_for_bit() -> Result<()> {
+    let source = assay()?;
+    let geometry = Geometry::candidate();
+    let off = Knobs {
+        history: false,
+        ..Knobs::core(0.003, 7)
+    };
+    let _scope = tuning::scoped(off);
+    let drill = Drill::new(&source, 7)?;
+    let state = State::with_cursor(geometry, 7, drill.cursor(0)?)?;
+    let mut store = ResidentStore::new(geometry, 7)?;
+    let prefix = state.shared.prefix(b"history off replay probe")?;
+    let trace = forward_path(
+        &mut store,
+        geometry,
+        &prefix,
+        vec![0.0; geometry.width],
+        &mut None,
+        state.tile_versions,
+    )?;
+    let expected = state.shared.readout(&trace.output)?.loss(b'z')?;
+    let observed = Replay::default().observe(&state, &mut store, &prefix, &trace, b'z')?;
+    assert_eq!(
+        observed.to_bits(),
+        expected.to_bits(),
+        "history-off observe must return exactly the readout loss, with no backward pass"
     );
     Ok(())
 }

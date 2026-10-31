@@ -151,6 +151,7 @@ fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
         ("checkpoint_every", json!(5), false),
         ("eval_every", json!(5), false),
         ("eval_cases", json!(3), false),
+        ("eval_spans", json!(8), false),
         ("resume", json!(true), false),
         ("out", json!("work/core-runs/y"), false),
         ("float_forward", json!(false), false),

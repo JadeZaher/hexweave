@@ -14,8 +14,6 @@ use super::tuning_measure;
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 
-/// Held-out probe span count; `SPAN_BYTES` sizes only this probe, `SPAN_WARMUP` (`replay`) is shared with train-ahead.
-const HELDOUT_SPANS: usize = 16;
 const STORY_PROMPTS: [&str; 4] = [
     "Once upon a time",
     "One day, a little girl named Lily",
@@ -27,12 +25,19 @@ fn per_byte(loss: &Loss) -> f64 {
     loss.nll_sum / loss.targets.max(1) as f64
 }
 
-/// Held-out and train-ahead bits per byte in both forward modes, plus greedy story-opening continuations; see AGENTS.md §core.
-pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<Value> {
+/// Held-out and train-ahead bits per byte in both forward modes, plus greedy story-opening
+/// continuations; `eval_spans` is the configured held-out sample size (`Config::eval_spans`,
+/// default 16, not part of the run identity); see AGENTS.md §core.
+pub(super) fn corpus(
+    state: &State,
+    store: &mut ResidentStore,
+    corpus: &Corpus,
+    eval_spans: usize,
+) -> Result<Value> {
     let float = tuning::current().float_forward;
-    let (own, targets) = heldout_nll(state, store, corpus)?;
+    let (own, targets) = heldout_nll(state, store, corpus, eval_spans)?;
     tuning::set_float_forward(!float);
-    let alternate = heldout_nll(state, store, corpus);
+    let alternate = heldout_nll(state, store, corpus, eval_spans);
     tuning::set_float_forward(float);
     let (alternate, _) = alternate?;
     let (ahead, ahead_targets) = train_ahead_nll(state, store, corpus)?;
@@ -92,11 +97,17 @@ pub(super) fn score_spans(
     Ok((nll / targets.max(1) as f64, targets))
 }
 
-/// Mean held-out NLL (nats per byte) over fixed spans under the installed forward mode.
-fn heldout_nll(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<(f64, u64)> {
+/// Mean held-out NLL (nats per byte) over `eval_spans` fixed spans (`SPAN_BYTES` each, warmed up
+/// by `SPAN_WARMUP`) under the installed forward mode.
+fn heldout_nll(
+    state: &State,
+    store: &mut ResidentStore,
+    corpus: &Corpus,
+    eval_spans: usize,
+) -> Result<(f64, u64)> {
     let heldout = &corpus.heldout;
-    let stride = heldout.len() / HELDOUT_SPANS;
-    let bounds: Vec<(usize, usize)> = (0..HELDOUT_SPANS)
+    let stride = heldout.len() / eval_spans;
+    let bounds: Vec<(usize, usize)> = (0..eval_spans)
         .map(|span| {
             (
                 span * stride,
