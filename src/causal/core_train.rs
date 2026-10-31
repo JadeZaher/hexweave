@@ -10,6 +10,7 @@ use super::core_config::{Config, Data};
 use super::core_corpus::Corpus;
 use super::core_drill::Drill;
 use super::core_eval;
+use super::core_log::{self, Evaluate, Marks, RecordState, Run};
 use super::core_redeal::CitationRedeal;
 use super::data::Dataset;
 use super::data_contracts::Split;
@@ -21,8 +22,7 @@ use super::telemetry::{self, Phase};
 use super::tuning;
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// Run (or resume) one core training job from a JSON config.
@@ -50,9 +50,9 @@ pub(super) fn run(path: &Path) -> Result<Value> {
                     inner: &train,
                     seed: config.seed,
                 };
-                drive(&config, &source, start, evaluate, false)
+                drive(&config, &source, start, evaluate, false, false)
             } else {
-                drive(&config, &train, start, evaluate, false)
+                drive(&config, &train, start, evaluate, false, false)
             }
         }
         Data::Drill { root } => {
@@ -65,6 +65,7 @@ pub(super) fn run(path: &Path) -> Result<Value> {
                 start,
                 &mut |state, store| core_eval::drill(state, store, &assay),
                 false,
+                false,
             )
         }
         Data::Corpus {
@@ -73,6 +74,7 @@ pub(super) fn run(path: &Path) -> Result<Value> {
             window,
         } => {
             let corpus = Corpus::open(root, manifest_sha256, *window)?;
+            let short = corpus.is_short();
             let start = State::with_cursor(geometry, config.seed, corpus.cursor(0)?)?;
             drive(
                 &config,
@@ -80,75 +82,9 @@ pub(super) fn run(path: &Path) -> Result<Value> {
                 start,
                 &mut |state, store| core_eval::corpus(state, store, &corpus),
                 true,
+                short,
             )
         }
-    }
-}
-
-type Evaluate<'a> = dyn FnMut(&State, &mut ResidentStore) -> Result<Value> + 'a;
-
-/// Interval bookkeeping between log lines.
-struct Marks {
-    loss: f64,
-    anchors: u64,
-    at: Instant,
-}
-
-impl Marks {
-    fn new(state: &State) -> Self {
-        Self {
-            loss: state.counters.anchor_loss_sum,
-            anchors: state.counters.anchors,
-            at: Instant::now(),
-        }
-    }
-}
-
-/// Per-tile max latent Adam step (index 0..TILES) plus tied E's step (index TILES).
-fn latent_steps() -> Vec<u64> {
-    let mut steps = vec![0u64; super::geometry::TILES + 1];
-    for ((owner, _), step) in tuning::steps() {
-        steps[owner] = steps[owner].max(step);
-    }
-    steps
-}
-
-fn record(
-    log: &mut std::fs::File,
-    state: &State,
-    store: &mut ResidentStore,
-    marks: &mut Marks,
-    evaluate: &mut Evaluate<'_>,
-    started: Instant,
-    ahead: &mut Ahead,
-) -> Result<Value> {
-    let trained = state.counters.anchors - marks.anchors;
-    let seconds = marks.at.elapsed().as_secs_f64();
-    let evaluation = telemetry::time(Phase::Evaluate, || evaluate(state, store))?;
-    let line = json!({
-        "anchors": state.global_opportunity, "epoch": state.cursor.epoch,
-        "train_loss": (state.counters.anchor_loss_sum - marks.loss) / trained.max(1) as f64,
-        "anchors_per_second": trained as f64 / seconds.max(1e-9),
-        "elapsed_seconds": started.elapsed().as_secs_f64(), "eval": evaluation,
-        "telemetry": telemetry::drain(seconds), "latent_steps": latent_steps(),
-        "train_ahead_prequential_bits_per_byte": ahead.take(),
-    });
-    writeln!(log, "{line}")?;
-    log.flush()?;
-    *marks = Marks::new(state);
-    Ok(line)
-}
-
-/// Feed a just-committed anchor's loss into the train-ahead accumulator (corpus runs only).
-fn feed_ahead(ahead: &mut Ahead, corpus: bool, step: &execution::Step) {
-    if let (
-        true,
-        execution::Step::Committed {
-            loss: Some(loss), ..
-        },
-    ) = (corpus, step)
-    {
-        ahead.add(*loss);
     }
 }
 
@@ -172,54 +108,14 @@ fn open(config: &Config, mut start: State, identity: &str) -> Result<(State, Res
     Ok((start, ResidentStore::new(geometry, config.seed)?))
 }
 
-/// Save only a Ready state whose cursor the source accepts.
-fn checkpoint<S: TrainingSource>(
-    config: &Config,
-    source: &S,
-    state: &State,
-    store: &ResidentStore,
-    identity: &str,
-) -> Result<PathBuf> {
-    state.validate_boundary()?;
-    source.validate(&state.cursor)?;
-    core_checkpoint::save(&config.out, state, store, identity)
-}
-
-/// Ensure the final anchors are checkpointed and logged, saving one more record if needed.
-#[allow(clippy::too_many_arguments)]
-fn finalize_last<S: TrainingSource>(
-    config: &Config,
-    source: &S,
-    state: &State,
-    store: &mut ResidentStore,
-    identity: &str,
-    marks: &mut Marks,
-    evaluate: &mut Evaluate<'_>,
-    started: Instant,
-    ahead: &mut Ahead,
-    log: &mut std::fs::File,
-    last: Option<Value>,
-) -> Result<(PathBuf, Value)> {
-    let n = state.global_opportunity;
-    let path = match core_checkpoint::latest(&config.out)? {
-        Some(path) if path.ends_with(format!("a{n:012}")) => path,
-        _ => telemetry::time(Phase::Checkpoint, || {
-            checkpoint(config, source, state, store, identity)
-        })?,
-    };
-    let last = match last {
-        Some(line) => line,
-        None => record(log, state, store, marks, evaluate, started, ahead)?,
-    };
-    Ok((path, last))
-}
-
+/// Train one corpus run's cursor forward; `corpus` gates the train-ahead feed, `short` nulls it on a corpus shorter than `AHEAD_ANCHORS`.
 fn drive<S: TrainingSource>(
     config: &Config,
     source: &S,
     start: State,
     evaluate: &mut Evaluate<'_>,
     corpus: bool,
+    short: bool,
 ) -> Result<Value> {
     let started = Instant::now();
     ensure!(
@@ -227,6 +123,11 @@ fn drive<S: TrainingSource>(
         "core numerics profile is not installed"
     );
     let identity = config.identity()?;
+    let run = Run {
+        config,
+        source,
+        identity: &identity,
+    };
     let (mut state, mut store) = open(config, start, &identity)?;
     source.validate(&state.cursor)?;
     let mut log = std::fs::OpenOptions::new()
@@ -240,11 +141,23 @@ fn drive<S: TrainingSource>(
             .context("wall_seconds overflows the clock")?,
     );
     let mut marks = Marks::new(&state);
-    let mut ahead = Ahead::default();
+    let mut ahead = Ahead::arm(
+        state.global_opportunity,
+        state.global_opportunity != 0,
+        short,
+    );
     let mut best = core_best::best_so_far(&config.out, &identity);
     let mut last = if state.global_opportunity == 0 {
-        Some(record(
-            &mut log, &state, &mut store, &mut marks, evaluate, started, &mut ahead,
+        Some(core_log::record(
+            &mut RecordState {
+                log: &mut log,
+                marks: &mut marks,
+                ahead: &mut ahead,
+            },
+            &state,
+            &mut store,
+            evaluate,
+            started,
         )?)
     } else {
         None
@@ -260,16 +173,24 @@ fn drive<S: TrainingSource>(
             break "deadline";
         }
         let step = execution::step(&mut state, &mut store, source, false)?;
-        feed_ahead(&mut ahead, corpus, &step);
+        core_log::feed_ahead(&mut ahead, corpus, &step);
         let n = state.global_opportunity;
         if n.is_multiple_of(config.checkpoint_every) {
             telemetry::time(Phase::Checkpoint, || {
-                checkpoint(config, source, &state, &store, &identity)
+                core_log::checkpoint(&run, &state, &store)
             })?;
         }
         last = if n.is_multiple_of(config.eval_every) {
-            Some(record(
-                &mut log, &state, &mut store, &mut marks, evaluate, started, &mut ahead,
+            Some(core_log::record(
+                &mut RecordState {
+                    log: &mut log,
+                    marks: &mut marks,
+                    ahead: &mut ahead,
+                },
+                &state,
+                &mut store,
+                evaluate,
+                started,
             )?)
         } else {
             None
@@ -280,9 +201,18 @@ fn drive<S: TrainingSource>(
             });
         }
     };
-    let (checkpoint, last) = finalize_last(
-        config, source, &state, &mut store, &identity, &mut marks, evaluate, started, &mut ahead,
-        &mut log, last,
+    let (checkpoint, last) = core_log::finalize_last(
+        &run,
+        &state,
+        &mut store,
+        &mut RecordState {
+            log: &mut log,
+            marks: &mut marks,
+            ahead: &mut ahead,
+        },
+        evaluate,
+        started,
+        last,
     )?;
     let n = state.global_opportunity;
     core_best::keep(&config.out, &state, &store, &identity, &last, &mut best);

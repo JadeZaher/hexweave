@@ -58,20 +58,34 @@ bytes in both forward modes on the same weights (`dev_*` for the run's mode,
 `train_ahead_frozen_*` frozen-scores the next `AHEAD_ANCHORS` (512) train bytes
 ahead of the cursor the same way (`Corpus::ahead_span`, wrapping once at the
 file end for byte selection; the prefix context before it clips at the file
-start like `window_before`, never wrapping backward). `core_train` separately
-accumulates `train_ahead_prequential_bits_per_byte`: the real prequential
-anchor loss (`execution::Step::Committed`'s loss) over exactly the first 512
-anchors trained after each evaluation, logged on the next evaluation line
-(null short of 512 anchors, or after a resume, since the accumulator is
-in-memory only and never persisted or checkpointed). The gap between the two
-is the online-adaptation effect on the same bytes; this replaces the old
-fixed-offset `train_frozen_*` probe, which mostly sampled train-file text the
-run had not yet reached. All three (held-out, train-ahead frozen, train-ahead
-prequential) score byte-for-byte comparably via `score_spans`, which steps
-only the warm-up and scored positions of each slice; the bytes before them are
-prefix context. `replay_contracts` pins its f64 result on a fixed probe: if
-that moves, evaluation numerics changed, and logged numbers from earlier
-commits must be re-scored before they are compared.
+start like `window_before`, never wrapping backward) -- null, cheaply, on a
+corpus shorter than `AHEAD_ANCHORS` (`Corpus::is_short`). The wrapped bytes see
+the previous epoch's tail as their context (the span is one flat byte array),
+while training itself restarts context at `[START]` at the epoch boundary, so
+the probe is an approximation near a wrap, not a reproduction of training's
+own epoch-boundary context. `core_log::feed_ahead` separately accumulates
+`train_ahead_prequential_bits_per_byte` in `core_ahead::Ahead`: the real
+prequential anchor loss (`execution::Step::Committed`'s loss) over exactly the
+first 512 anchors trained after each evaluation, logged on the next evaluation
+line alongside `train_ahead_window_start` (the eval anchor its frozen probe
+was logged at) -- pair the prequential value with the frozen probe logged at
+that anchor; a null `train_ahead_window_start` means it is unpaired. Both are
+null short of 512 anchors; `Ahead` is also disarmed for the one window
+spanning a resume (its cursor's frozen probe was never logged, since resuming
+skips the initial record line -- see §Core path below), and on a short corpus
+every window is null. The gap between the two is the online-adaptation effect
+on the same bytes; this replaces the old fixed-offset `train_frozen_*` probe,
+which mostly sampled train-file text the run had not yet reached. The held-out
+and train-ahead-frozen probes score byte-for-byte comparably to each other via
+`score_spans`, which steps only the warm-up and scored positions of each slice
+(the bytes before them are prefix context); `train_ahead_prequential` is not
+scored this way at all -- it is the raw training loss on those bytes, logged
+after the fact -- and even the two `score_spans` probes are only
+approximately comparable to training's own loss, since `Replay`'s history
+window differs from training's own real window (§Core path below) and the
+wrap-context caveat above. `replay_contracts` pins its f64 result on a fixed
+probe: if that moves, evaluation numerics changed, and logged numbers from
+earlier commits must be re-scored before they are compared.
 
 Forward mode: `float_forward: true` (a `Knobs` field, so part of the identity;
 absent means ternary) makes every weight product read the matrix's f32 latent
@@ -87,10 +101,15 @@ ternary lattice and are clipped to [-1, 1] (not a conventional float init);
 versions and `immutable::identity` still track trits, not the float function
 (history staleness stays bounded by age); evaluation now replays training's
 own up-to-two-anchor history window (`replay.rs`) instead of zero history,
-which moves held-out NLL by at most 0.005 nats/byte -- most of the remaining
-train/held-out gap is online adaptation (prequential scoring on weights that
-just updated on the same bytes), not history, per the `train_ahead_*` probes
-(`core_eval::corpus`). Corpus runs ignore `eval_cases`; best-checkpoint selection applies
+which moves held-out NLL by at most 0.005 nats/byte. The hypothesis the
+`train_ahead_*` pair tests (`core_eval::corpus`, `core_ahead::Ahead`) is that
+most of the remaining train/held-out gap is online adaptation (prequential
+scoring on weights that just updated on the same bytes), not history -- this
+is untested on a run with an actual gap: the only logged pair so far
+(`work/core-runs/profile-ahead`, a 3,000-anchor smoke run) shows the frozen
+and prequential values nearly equal (4.4888 vs 4.4886 bits/byte), so the
+hypothesis wants reading from a late interval of a long run, not this smoke
+data. Corpus runs ignore `eval_cases`; best-checkpoint selection applies
 to them as to science runs. `prepare_corpus.py` writes LF manifests and refuses
 an existing corpus directory; the first TinyStories manifest (pinned by the
 2026-10-28 runs) predates that and has CRLF line endings.
@@ -109,8 +128,14 @@ newest is the selected one) with an identity-stamped `selection.json` published
 atomically (`core_best`): another run's selection is ignored, a fresh run (and
 the owner) refuses a non-empty `out/best`, a better repeat at an anchor that
 already has a best checkpoint only updates the selection, and a failed best
-save is logged, never fatal. The newest-three rotation had pruned the 72-row
-run's best state (80k anchors) once the 140k checkpoint landed.
+save is logged, never fatal. `best_so_far` ignores a selection from an earlier
+`EVAL_VERSION` (bumped when evaluation numerics change, e.g. history replay):
+resuming a run from before `70a4c51` therefore starts a fresh best selection
+from infinity, and since only the newest three best checkpoints are kept, the
+old run's best state can rotate out after three more saves at the new eval
+version -- copy it aside first if it must be kept. The newest-three rotation
+had pruned the 72-row run's best state (80k anchors) once the 140k checkpoint
+landed.
 `drill` (`core_drill`, v2) replays the assay schedule in 1,600-anchor cycles
 (16 foundation passes, then 4 retention-stress passes) and re-deals values and
 the asked key with `tuning_sources::redeal` under the harness's per-cycle salt,
@@ -150,15 +175,26 @@ the byte it just emitted, after a warm-up that observes the prompt's own last
 `SPAN_WARMUP` bytes so the first generated byte is not zero-history either)
 through `replay::Replay`, matching training's own anchor schedule with frozen
 weights (`replay_contracts`): the window holds up to two anchors, but training
-keeps the older anchor only when no trit flipped in between
-(`history::Record::compatible`), so Replay is an upper bound on training's
-real window (`telemetry`'s `history_len` logs the mean records present per
-training anchor, right after prune). This replaces the zero-history teacher
+prunes the older anchor once any visited tile's or E's version has advanced
+twice since it was recorded, not once (`history::Record::compatible` tolerates
+a lag of 1), so Replay is an upper bound on training's real window.
+`telemetry`'s `history_len` logs the mean history RECORDS present per training
+anchor right after prune -- one record per route visit, not one per anchor --
+and measured on `work/core-runs/profile-ahead` it equals the interval's mean
+route length (3.298 and 3.014 at intervals 2-3, matching `route_lengths`), so
+steady-state training there kept exactly one anchor's records, not two. This
+replaces the zero-history teacher
 forcing used before; it costs one extra backward (gather) pass per evaluated
 byte (about 3x evaluation cost). `evaluation::teacher` starts a fresh `Replay`
 per development row (zero history at each row's first byte), while training
 carries history continuously across anchors, so `science` evaluation still
-does not reproduce training's own history shape even with replay. Drill
+does not reproduce training's own history shape even with replay.
+Generation's own warm-up (below) compounds this for science: it calls
+`Replay::observe` on the prompt's own last `SPAN_WARMUP` bytes as if they were
+targets, something science training never does (training only ever credits
+completion/citation bytes, never prompt bytes), so the history at the first
+generated (answer) byte matches neither training's own history nor a
+zero-history baseline exactly. Drill
 evaluation is intentionally zero-history (`tuning_measure`/`assay_measure` run
 their own zero-history forward loops and never call `generation::generate`),
 so it stays identical to the validated harness evaluation it is pinned against.
@@ -166,7 +202,7 @@ so it stays identical to the validated harness evaluation it is pinned against.
 ## Telemetry
 
 `telemetry.rs` keeps one thread-local interval of phase wall time and realized
-training routes. `core_train::record` drains it into each `log.jsonl` line under
+training routes. `core_log::record` drains it into each `log.jsonl` line under
 `telemetry` and resets it. Nothing is persisted, hashed or part of the run
 identity, so it cannot change numerics, checkpoints or resume; the first line
 after a resume covers only the resumed interval. Phases are disjoint call sites:
@@ -184,10 +220,13 @@ the eight most frequent. `execution::START_TILE` is the single entry tile for
 training, evaluation and generation. Each log line also carries `latent_steps`
 (`tuning::steps`): per-tile max latent Adam step plus tied E's, under the core
 path's latent update rule; and `history_len` (`telemetry::history`, recorded
-once per training anchor right after `prune`): the mean history records
-present at forward (null if no anchors in the interval), usually well under
-Replay's two-anchor ceiling since training prunes a stale anchor on its first
-trit flip (see §Core path).
+once per training anchor right after `prune`): the mean history RECORDS
+present at forward (null if no anchors in the interval; one record per route
+visit, not one per anchor) -- measured on `work/core-runs/profile-ahead` it
+equals the interval's mean route length, i.e. steady-state training there
+kept one anchor's records, not Replay's two-anchor ceiling, since training
+prunes a stale anchor on the SECOND version bump of any visited tile or E,
+not the first (see §Core path).
 
 ## Separate owned retained-text assay
 

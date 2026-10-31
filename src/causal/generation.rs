@@ -1,7 +1,6 @@
-use super::core_corpus::SPAN_WARMUP;
 use super::execution::{forward_path, Trace};
 use super::immutable;
-use super::replay::Replay;
+use super::replay::{Replay, SPAN_WARMUP};
 use super::state::{count, State};
 use super::store_api::TileStore;
 use anyhow::{ensure, Result};

@@ -1,9 +1,11 @@
 //! Core checkpoint resume contracts: bit-exact fallback, quarantine policy, identity refusal.
 
 use super::checkpoint_state::StateRecord;
+use super::core_ahead::Ahead;
 use super::core_best;
 use super::core_checkpoint;
 use super::core_contracts::{assay, fingerprint, fresh_temp, train};
+use super::core_corpus::AHEAD_ANCHORS;
 use super::core_drill::Drill;
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
@@ -189,4 +191,43 @@ fn float_forward_resume_is_bit_exact() -> Result<()> {
     );
     std::fs::remove_dir_all(&out)?;
     Ok(())
+}
+
+/// The train-ahead window is null short of `AHEAD_ANCHORS`; a resume-disarmed window is still
+/// null even once full, since its cursor has no frozen probe logged to pair with; a short corpus
+/// nulls every window.
+#[test]
+fn train_ahead_window_is_null_short_disarmed_or_short() {
+    let mut fresh = Ahead::arm(0, false, false);
+    assert_eq!(
+        fresh.take(),
+        (None, None),
+        "fewer than AHEAD_ANCHORS gives null"
+    );
+    for _ in 0..AHEAD_ANCHORS {
+        fresh.add(0.5);
+    }
+    assert_eq!(
+        fresh.take(),
+        (Some(0.5 / std::f64::consts::LN_2), Some(0)),
+        "a full window pairs its value with its start anchor"
+    );
+
+    let mut resumed = Ahead::arm(500, true, false);
+    for _ in 0..AHEAD_ANCHORS {
+        resumed.add(0.5);
+    }
+    assert_eq!(
+        resumed.take(),
+        (None, None),
+        "a disarmed window after a resume is null even once full"
+    );
+
+    let mut short = Ahead::arm(0, false, true);
+    short.add(0.5);
+    assert_eq!(
+        short.take(),
+        (None, None),
+        "a short corpus nulls every window"
+    );
 }

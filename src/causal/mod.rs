@@ -19,6 +19,7 @@ mod core_config;
 mod core_corpus;
 mod core_drill;
 mod core_eval;
+mod core_log;
 mod core_redeal;
 mod core_train;
 mod credit;

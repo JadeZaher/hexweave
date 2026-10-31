@@ -1,5 +1,4 @@
-//! History replay for evaluation and generation: rebuilds training's `history` input from each
-//! position's actual next byte with frozen weights, on training's own schedule; see AGENTS.md §core.
+//! History replay for evaluation and generation: rebuilds training's `history` input from each position's actual next byte with frozen weights; see AGENTS.md §core.
 
 use super::credit;
 use super::execution::Trace;
@@ -9,9 +8,10 @@ use super::state::State;
 use super::store_api::TileStore;
 use anyhow::Result;
 
-/// Training's clock advances four ticks per anchor; records live for up to two anchors --
-/// training keeps the older anchor only when no trit flipped in between.
+/// Training's clock advances four ticks per anchor; see AGENTS.md §core for the prune rule.
 const TICKS_PER_ANCHOR: u64 = 4;
+/// Warm-up positions scored before a probe span, and generation's own prompt warm-up length; see AGENTS.md §core.
+pub(super) const SPAN_WARMUP: usize = 2;
 
 #[derive(Default)]
 pub(super) struct Replay {
@@ -27,8 +27,7 @@ impl Replay {
         self.history.mean(state.geometry)
     }
 
-    /// Record this position's corrections toward `target`, as training does after each anchor,
-    /// without touching any weight.
+    /// Record this position's corrections toward `target`, as training does after each anchor, without touching any weight.
     pub fn observe<S: TileStore>(
         &mut self,
         state: &State,

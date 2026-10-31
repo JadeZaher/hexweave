@@ -1,12 +1,12 @@
 //! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
-use super::core_corpus::{window_before, Corpus, END, SPAN_BYTES, SPAN_WARMUP};
+use super::core_corpus::{window_before, Corpus, AHEAD_ANCHORS, END, SPAN_BYTES};
 use super::data::Dataset;
 use super::evaluation::{self, Limits, Loss};
 use super::execution::forward_path;
 use super::generation::{self, Terminal};
-use super::replay::Replay;
+use super::replay::{Replay, SPAN_WARMUP};
 use super::resident::ResidentStore;
 use super::state::State;
 use super::tuning;
@@ -14,8 +14,7 @@ use super::tuning_measure;
 use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 
-/// Held-out probe spans; `SPAN_BYTES`/`SPAN_WARMUP` (shared with the train-ahead probe) live in
-/// `core_corpus` beside the file reads they also size.
+/// Held-out probe span count; `SPAN_BYTES` sizes only this probe, `SPAN_WARMUP` (`replay`) is shared with train-ahead.
 const HELDOUT_SPANS: usize = 16;
 const STORY_PROMPTS: [&str; 4] = [
     "Once upon a time",
@@ -28,9 +27,7 @@ fn per_byte(loss: &Loss) -> f64 {
     loss.nll_sum / loss.targets.max(1) as f64
 }
 
-/// Held-out bits per byte under both forward modes on the same weights (the run's own mode and,
-/// as `alternate`, the other), the byte-matched train-ahead generalization-gap probe in the run's
-/// mode only, plus greedy continuations of story openings in the run's mode.
+/// Held-out and train-ahead bits per byte in both forward modes, plus greedy story-opening continuations; see AGENTS.md §core.
 pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Result<Value> {
     let float = tuning::current().float_forward;
     let (own, targets) = heldout_nll(state, store, corpus)?;
@@ -54,13 +51,12 @@ pub(super) fn corpus(state: &State, store: &mut ResidentStore, corpus: &Corpus) 
         "dev_nll_per_byte": own, "dev_bits_per_byte": bits(own), "forward": mode(float),
         "alternate_forward": mode(!float), "alternate_bits_per_byte": bits(alternate),
         "heldout_targets": targets, "samples": samples,
-        "train_ahead_frozen_nll_per_byte": ahead, "train_ahead_frozen_bits_per_byte": bits(ahead),
+        "train_ahead_frozen_nll_per_byte": ahead, "train_ahead_frozen_bits_per_byte": ahead.map(bits),
         "train_ahead_frozen_targets": ahead_targets,
     }))
 }
 
-/// Mean teacher-forced NLL (nats per byte) over frozen-weight spans; see AGENTS.md §core for the
-/// warm-up/window convention shared by the held-out and train-ahead probes.
+/// Mean teacher-forced NLL (nats per byte) over frozen-weight spans, stepping only the warm-up/scored positions of each slice; see AGENTS.md §core.
 pub(super) fn score_spans(
     state: &State,
     store: &mut ResidentStore,
@@ -120,16 +116,18 @@ fn heldout_nll(state: &State, store: &mut ResidentStore, corpus: &Corpus) -> Res
     score_spans(state, store, &spans, corpus.window)
 }
 
-/// Mean frozen-weight NLL (nats per byte) on the next `AHEAD_ANCHORS` train bytes ahead of the
-/// cursor (`Corpus::ahead_span`), run's own forward mode only: a byte-matched generalization-gap
-/// monitor against the held-out NLL above and the prequential `train_ahead` loss in `core_train`.
+/// Frozen-weight NLL (nats per byte) on the next `AHEAD_ANCHORS` train bytes ahead of the cursor, or null on a corpus shorter than that; see AGENTS.md §core.
 fn train_ahead_nll(
     state: &State,
     store: &mut ResidentStore,
     corpus: &Corpus,
-) -> Result<(f64, u64)> {
+) -> Result<(Option<f64>, u64)> {
     let (span, scored) = corpus.ahead_span(state.cursor.completion_offset as u64, corpus.window)?;
-    score_spans(state, store, &[(&span, scored)], corpus.window)
+    if (scored as u64) < AHEAD_ANCHORS {
+        return Ok((None, 0));
+    }
+    let (nll, targets) = score_spans(state, store, &[(&span, scored)], corpus.window)?;
+    Ok((Some(nll), targets))
 }
 
 /// Public dev-set assessment (teacher-forced NLL plus greedy JSON answers) and train samples.

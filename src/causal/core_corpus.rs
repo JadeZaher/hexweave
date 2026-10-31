@@ -1,10 +1,10 @@
-//! Byte corpus for next-byte pretraining: the pinned train file is read by window from disk, so memory
-//! stays flat however large it grows; the small held-out file is kept for bits per byte. See AGENTS.md §core.
+//! Byte corpus for next-byte pretraining: the pinned train file is read by window from disk; see AGENTS.md §core.
 
 use super::cursor::{AnchorTarget, Cursor};
 use super::data::DataIdentity;
 use super::data_contracts::{Split, TargetKind};
 use super::execution::TrainingSource;
+use super::replay::SPAN_WARMUP;
 use super::storage_paths::digest;
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
@@ -19,9 +19,8 @@ pub(super) const START: u8 = 0x02;
 /// Story terminator written by `scripts/prepare_corpus.py`.
 pub(super) const END: u8 = 0x03;
 const HELDOUT_CAP: u64 = 64 << 20;
-/// Bytes scored per frozen-weight span, and warm-up positions before it; see AGENTS.md §core.
+/// Bytes scored per frozen-weight span; see AGENTS.md §core.
 pub(super) const SPAN_BYTES: usize = 128;
-pub(super) const SPAN_WARMUP: usize = 2;
 /// Scored anchors in the train-ahead probes; see AGENTS.md §core.
 pub(super) const AHEAD_ANCHORS: u64 = 512;
 
@@ -160,8 +159,7 @@ impl Corpus {
         read_at(&self.train, start, end)
     }
 
-    /// `len` (<= length) train bytes from `start`, wrapping once at the file end like
-    /// consecutive train targets do; see AGENTS.md §core.
+    /// `len` (<= length) train bytes from `start`, wrapping once at the file end like consecutive train targets do; see AGENTS.md §core.
     fn wrapped(&self, start: u64, len: u64) -> Result<Vec<u8>> {
         ensure!(
             start < self.length && len <= self.length,
@@ -179,14 +177,18 @@ impl Corpus {
         }
     }
 
-    /// The train-ahead probe span and its scored count, starting at the cursor's current
-    /// position; see AGENTS.md §core.
+    /// The train-ahead probe span and its scored count, starting at the cursor's current position; see AGENTS.md §core.
     pub fn ahead_span(&self, start: u64, window: usize) -> Result<(Vec<u8>, usize)> {
         let scored = usize::try_from(AHEAD_ANCHORS.min(self.length))?;
         let left = start.saturating_sub(SPAN_WARMUP as u64 + window as u64);
         let before = self.read(left, start)?;
         let scored_bytes = self.wrapped(start, scored as u64)?;
         Ok(([before, scored_bytes].concat(), scored))
+    }
+
+    /// Whether the train file is shorter than `AHEAD_ANCHORS`, so the train-ahead probes null.
+    pub fn is_short(&self) -> bool {
+        self.length < AHEAD_ANCHORS
     }
 }
 

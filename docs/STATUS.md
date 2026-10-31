@@ -74,11 +74,12 @@ training fit has been measured.
   above, evaluated once with history replay): 2.6166 bits/byte (f32; 2.612
   zero-history) and 2.6226 (ternary; 2.623). Alternate modes at these same
   best states, zero-history: 2.6536 (f32 read as trits) and 2.9733 (ternary
-  latents read as f32) -- not the 2.681/3.015 final-state numbers below;
+  latents read as f32) -- not the 2.681/3.015 final-state numbers above;
   replay moved them to 2.660 (+0.0060) and 2.972 (-0.0015). History (zero vs
-  up to two anchors) is therefore at most a 0.005 nats/byte effect; training's
-  real window is 1-2 anchors (now logged as `history_len`), not Replay's
-  fixed two (see `src/causal/AGENTS.md` §core). Frozen weights score 2.791
+  up to two anchors) is therefore at most a 0.005 bits/byte effect; training's
+  real window, measured on `work/core-runs/profile-ahead` (`history_len`
+  equals the mean route length there), is one anchor's records in steady
+  state, not Replay's fixed two (see `src/causal/AGENTS.md` §core). Frozen weights score 2.791
   (f32) and 2.941 (ternary) bits/byte on four fixed 128-byte train spans
   (`train_frozen_*`, `rescore-*-3`): those spans were mostly unseen
   train-file text (offsets beyond the ~1.2-1.5 MB the best states had
@@ -94,11 +95,11 @@ training fit has been measured.
   27%, per-tile backward 21%, route backward (`gather`) 19%, predictor and
   history 13%, forward 10%, window embedding 7%, everything else ~3%;
   evaluation 27-31 s each. Routing shows an early transient lock-in: 48
-  distinct routes across anchors 1-1,000 (tile 5 touched on 107 of them), down
-  to 3 distinct routes by 2,000-3,000 (`[3,1,4]` on 986 of the last 1,000).
-  Over the full tiny-* runs every tile was updated (`latent_steps`): minor
-  tiles received 10-20% of the start tile's update count, and every tile
-  reached at least ~9.7% of anchors. The two arms favored different tile
+  distinct routes across anchors 1-1,000 (tile 5 touched on 107 of those
+  1,000 anchors), down to 3 distinct routes by 2,000-3,000 (`[3,1,4]` on 986
+  of the last 1,000). Over the full tiny-* runs every tile was updated
+  (`latent_steps`): minor tiles received 10-20% of the start tile's update
+  count, and every tile was stepped on in at least ~9.7% of anchors. The two arms favored different tile
   sets, so usage is run-specific, not a fixed collapse. Exploration (e.g.
   `no_halt`) is a measured experiment to try next, not a fix for a proven
   capacity problem.

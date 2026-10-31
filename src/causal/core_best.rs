@@ -1,5 +1,4 @@
-//! Best-checkpoint selection for runs whose evaluation reports `dev_nll_per_byte` (science and corpus):
-//! the lowest is kept under `out/best` with an identity-stamped `selection.json`; see AGENTS.md §core.
+//! Best-checkpoint selection (science and corpus runs): the lowest `dev_nll_per_byte` is kept under `out/best`; see AGENTS.md §core.
 
 use super::core_checkpoint;
 use super::resident::ResidentStore;
@@ -8,12 +7,10 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// Bump when evaluation numerics change (2 = history replay) so a selection from an earlier
-/// eval version is never compared against the new NLL scale.
+/// Bump when evaluation numerics change (2 = history replay) so an earlier eval version's selection is never compared against the new NLL scale.
 const EVAL_VERSION: u64 = 2;
 
-/// Lowest dev NLL this run identity recorded at the current eval version; infinity if none,
-/// unreadable, from another run or from an earlier eval version.
+/// Lowest dev NLL this run identity recorded at the current eval version; infinity if none, unreadable, foreign or stale.
 pub(super) fn best_so_far(out: &Path, identity: &str) -> f64 {
     std::fs::read(out.join("best").join("selection.json"))
         .ok()
