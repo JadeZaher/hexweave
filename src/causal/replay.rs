@@ -6,6 +6,7 @@ use super::history::History;
 use super::shared::Prefix;
 use super::state::State;
 use super::store_api::TileStore;
+use super::tuning;
 use anyhow::Result;
 
 /// Training's clock advances four ticks per anchor; see AGENTS.md §core for the prune rule.
@@ -20,14 +21,19 @@ pub(super) struct Replay {
 }
 
 impl Replay {
-    /// The `history` input for the next forward pass: training's prune, then mean.
+    /// The `history` input for the next forward pass: zero when the knob is off, else training's
+    /// prune then mean.
     pub fn input(&mut self, state: &State) -> Result<Vec<f32>> {
+        if !tuning::current().history {
+            return Ok(vec![0.0; state.geometry.width]);
+        }
         self.history
             .prune(self.clock, &state.tile_versions, state.shared.version);
         self.history.mean(state.geometry)
     }
 
-    /// Record this position's corrections toward `target`, as training does after each anchor, without touching any weight.
+    /// Record this position's corrections toward `target`, as training does after each anchor,
+    /// without touching any weight; skipped (loss still returned) when the knob is off.
     pub fn observe<S: TileStore>(
         &mut self,
         state: &State,
@@ -37,15 +43,17 @@ impl Replay {
         target: u8,
     ) -> Result<f32> {
         let credit = credit::gather(state, store, prefix, trace, target)?;
-        let records = credit::records(
-            state,
-            trace,
-            &credit.corrections,
-            prefix.shared_version,
-            self.clock,
-        )?;
-        for record in records {
-            self.history.push(record, state.geometry)?;
+        if tuning::current().history {
+            let records = credit::records(
+                state,
+                trace,
+                &credit.corrections,
+                prefix.shared_version,
+                self.clock,
+            )?;
+            for record in records {
+                self.history.push(record, state.geometry)?;
+            }
         }
         self.clock += TICKS_PER_ANCHOR;
         Ok(credit.loss)

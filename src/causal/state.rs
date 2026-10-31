@@ -112,6 +112,7 @@ impl State {
             self.global_opportunity,
             self.geometry,
             self.anchors_only(),
+            self.history.records.is_empty(),
         )?;
         if let Some(assay) = &self.assay {
             assay.validate(self)?;

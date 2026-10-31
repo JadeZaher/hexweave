@@ -56,6 +56,7 @@ mod tile_gradients;
 mod tuning;
 mod tuning_measure;
 mod tuning_sources;
+mod tuning_update;
 mod weights;
 
 #[cfg(test)]
@@ -78,6 +79,8 @@ mod execution_contracts;
 mod float_contracts;
 #[cfg(test)]
 mod generation_contracts;
+#[cfg(test)]
+mod history_contracts;
 #[cfg(test)]
 mod numerical_tests;
 #[cfg(test)]

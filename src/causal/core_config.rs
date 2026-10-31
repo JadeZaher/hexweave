@@ -48,6 +48,17 @@ pub(super) struct Config {
     /// Compute with f32 latent weights instead of trits (`weights.rs`); absent means ternary.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub float_forward: bool,
+    /// Zero history input, skipping records/predictor training (`tuning::Knobs::history`); absent means on.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub history: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Config {
@@ -87,6 +98,7 @@ impl Config {
     pub fn knobs(&self) -> Knobs {
         Knobs {
             float_forward: self.float_forward,
+            history: self.history,
             ..Knobs::core(self.rate, self.seed)
         }
     }

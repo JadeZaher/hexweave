@@ -1,6 +1,7 @@
 use super::geometry::{Geometry, MATRIX_COUNT, TILES};
 use super::predictor_joint::Update;
 use super::state::count;
+use super::tuning;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -112,6 +113,7 @@ impl Counters {
         opportunity: u64,
         geometry: Geometry,
         assay: bool,
+        history_empty: bool,
     ) -> Result<()> {
         let anchors = if assay {
             opportunity
@@ -143,25 +145,43 @@ impl Counters {
             "local update counters mismatch"
         );
         ensure!(
-            self.predictor_anchor_updates == self.anchors
-                && self.predictor_anchor_pairs >= self.anchors
-                && self.predictor_anchor_pairs <= self.anchors.saturating_mul(4)
-                && self.predictor_replay_updates <= self.local_opportunities
+            self.predictor_replay_updates <= self.local_opportunities
                 && self.predictor_replay_pairs >= self.predictor_replay_updates
                 && self.predictor_replay_pairs <= self.predictor_replay_updates.saturating_mul(4),
-            "predictor counters mismatch"
+            "predictor replay counters mismatch"
         );
+        // `tuning::Knobs::history` off: `credit::anchor` never calls `train_records`, so no
+        // anchor pair/update is ever produced and `History` stays empty; see AGENTS.md §State
+        // encoding. On, this is the original anchors-equal-updates invariant unchanged.
+        if tuning::current().history {
+            ensure!(
+                self.predictor_anchor_updates == self.anchors
+                    && self.predictor_anchor_pairs >= self.anchors
+                    && self.predictor_anchor_pairs <= self.anchors.saturating_mul(4)
+                    && self
+                        .predictor_anchor_pairs
+                        .checked_add(self.local_tile_updates)
+                        == Some(self.visits)
+                    && self.anchor_tile_commits >= self.anchors
+                    && self.anchor_tile_commits <= self.predictor_anchor_pairs,
+                "predictor anchor counters mismatch"
+            );
+        } else {
+            ensure!(
+                self.predictor_anchor_updates == 0
+                    && self.predictor_anchor_pairs == 0
+                    && history_empty
+                    && self.anchor_tile_commits >= self.anchors
+                    && self.anchor_tile_commits <= self.anchors.saturating_mul(4),
+                "history-off predictor/history counters mismatch"
+            );
+        }
         ensure!(
-            self.predictor_anchor_pairs
-                .checked_add(self.local_tile_updates)
-                == Some(self.visits)
-                && self.anchor_tile_commits >= self.anchors
-                && self.anchor_tile_commits <= self.predictor_anchor_pairs
-                && self.predictor_transitions
-                    <= self
-                        .predictor_anchor_updates
-                        .saturating_add(self.predictor_replay_updates)
-                        .saturating_mul(geometry.width as u64),
+            self.predictor_transitions
+                <= self
+                    .predictor_anchor_updates
+                    .saturating_add(self.predictor_replay_updates)
+                    .saturating_mul(geometry.width as u64),
             "update/visit accounting mismatch"
         );
         ensure!(

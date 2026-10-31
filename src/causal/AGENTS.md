@@ -114,6 +114,21 @@ to them as to science runs. `prepare_corpus.py` writes LF manifests and refuses
 an existing corpus directory; the first TinyStories manifest (pinned by the
 2026-10-28 runs) predates that and has CRLF line endings.
 
+The `history` `Knobs` field (Stage 3 ablation, default true; serialized only when
+false, the mirror image of `float_forward`'s serialize-only-when-true, so an
+absent or `true` value keeps the existing golden identity and every old
+checkpoint resumable) turns off the history input end to end: the anchor branch
+of `execution::complete` passes a zero vector of `state.history.mean`'s width
+instead of calling it; `credit::anchor` skips `train_records` entirely, so no
+features are built, the predictor never fits and nothing is pushed to
+`History` (the predictor is unused under anchor-only regardless); and
+`replay::Replay::input`/`observe` do the same for evaluation and generation,
+still returning the correct loss from `credit::gather` since that does not
+touch history. A `false` run gets a different run identity (`core_contracts`'s
+identity table pins both directions) and a different trained loss sequence
+from the same seed, since the forward pass sees different input; see §State
+encoding for the counter invariant this gates.
+
 Data: `science` trains on a pinned QA Dataset's train split and evaluates the
 development split with `evaluation::evaluate` (teacher-forced NLL, coverage,
 greedy JSON answers, exact answer/citation) plus four train-row samples. Every
@@ -226,7 +241,10 @@ visit, not one per anchor) -- measured on `work/core-runs/profile-ahead` it
 equals the interval's mean route length, i.e. steady-state training there
 kept one anchor's records, not Replay's two-anchor ceiling, since training
 prunes a stale anchor on the SECOND version bump of any visited tile or E,
-not the first (see §Core path).
+not the first (see §Core path). `history: false` (the ablation knob, §Core
+path) drives this to exactly 0 for every anchor, since `telemetry::history`
+still runs but `state.history.records` never receives a push; the
+`history_contracts` test pins this at 0.0 over a 12-anchor drill run.
 
 ## Separate owned retained-text assay
 
@@ -336,6 +354,15 @@ numerical constructors.
 All gradients are shape/finite-validated before tile apply mutates any matrix.
 Invalid version increment fails first. A failed numerical calculation never
 justifies advancing the committed checkpoint/cursor.
+
+`state_counters::Counters::validate_schedule` gates its predictor-anchor
+invariant on `tuning::current().history`: on, `predictor_anchor_updates ==
+anchors` as always; off, it instead requires `predictor_anchor_updates == 0`,
+`predictor_anchor_pairs == 0` and an empty `History` (the knob's effect on
+`credit::anchor`, §Core path), while the surrounding tile-commit and
+predictor-replay checks are unconditional either way. Knobs are installed
+before a checkpoint loads (`core_train::run`), so `resume` validates a
+restored state under the same rule the run was trained under.
 
 `state_codec` writes each tile, E and the predictor as one binary object: magic
 `HWCPACK1`, geometry (width, FFN, heads, context), object kind, tile ID, weight
@@ -547,6 +574,10 @@ swapped in with equal length/mtime/creation time also passes until then.
 `tuning.rs` holds the numerics profile: `Knobs::PINNED` (v3/assay numerics) and
 `Knobs::core` (`§Core path`). Every build reads a thread-local; production sets
 it only through `core_train::run` -> `install`, so every other path stays pinned.
+`tuning_update.rs` holds `Latent`, the tuned update rules (normalized/raw
+stochastic rounding, latent Adam) and the per-call draw-counter stream
+(`stream`, `hash`), re-exported from `tuning` so every existing `tuning::`
+call site is unchanged.
 The in-memory harness `tuning_harness.rs` (ignored test `tuning_run`, driven by
 `HEXWEAVE_TUNE_*` variables and `work/tuning/tune.py`) explores further knobs
 under the test-only `scoped()` guard, which restores pinned knobs on drop. Pinned

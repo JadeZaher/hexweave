@@ -53,6 +53,7 @@ fn knobs(seed: u64) -> Result<Knobs> {
         route_salt: 0,
         seed,
         float_forward: false,
+        history: true,
     })
 }
 

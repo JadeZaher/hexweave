@@ -159,7 +159,11 @@ fn complete<S: TileStore, D: TrainingSource>(
     prune(state)?;
     let loss = if state.anchors_only() || opportunity.is_multiple_of(4) {
         telemetry::history(state.history.records.len());
-        let history = state.history.mean(state.geometry)?;
+        let history = if knobs.history {
+            state.history.mean(state.geometry)?
+        } else {
+            vec![0.0; state.geometry.width]
+        };
         let versions = state.tile_versions;
         let trace = telemetry::time(Phase::Forward, || {
             forward_path(

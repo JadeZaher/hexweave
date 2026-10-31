@@ -7,6 +7,7 @@ use super::state::{count, State};
 use super::store_api::TileStore;
 use super::telemetry::{self, Phase};
 use super::tile_gradients::TileGradients;
+use super::tuning;
 use crate::topology::Mesh;
 use anyhow::{ensure, Result};
 
@@ -83,8 +84,11 @@ pub(super) fn anchor<S: TileStore>(
     })?;
     count(&mut state.counters.shared_transitions, transitions)?;
     drop(credit.embedding_gradient);
-    telemetry::time(Phase::Records, || {
-        train_records(state, trace, &credit.corrections, prefix.shared_version)
+    telemetry::time(Phase::Records, || -> Result<()> {
+        if tuning::current().history {
+            train_records(state, trace, &credit.corrections, prefix.shared_version)?;
+        }
+        Ok(())
     })?;
     Ok(credit.loss)
 }
