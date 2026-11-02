@@ -1,7 +1,7 @@
 # Hexweave status
 
 Updated 2026-11-02 America/Denver. **The core training path is implemented and
-is the build; no run is in progress. No useful-assistant result or finite
+is the build; the bounded Stage 4 rate scan is in progress. No useful-assistant result or finite
 training ETA is established.**
 
 ## Implemented
@@ -32,8 +32,8 @@ passes over twelve anchors in all history/float combinations; threaded batch
 four matches sequential execution and checkpoint continuation under non-default
 knobs. The unchanged v1 harness and span golden passed. Re-scoring the saved
 100k history-on checkpoint reproduced 3.3469990231317888 bits/byte and alternate
-3.4310734260737847 exactly. Throughput and Stage 4 quality remain unmeasured
-for v2; these software checks establish neither speedup nor improved learning.
+3.4310734260737847 exactly. Stage 4 quality remains unmeasured for v2; these
+software checks establish neither speedup nor improved learning.
 
 ## Archived
 
@@ -51,6 +51,28 @@ training fit has been measured.
 
 ## Current runs
 
+- `profile-v2-b{1,8,32}-20261102` completed through the capped owner, 3,008
+  anchors each, seed 7, rate 0.003, original history policy, exploration off.
+  Training throughput was 51.71 / 92.35 / 89.76 anchors/s; owner peak working
+  sets were 91.6 / 94.1 / 120.1 MiB; optimizer steps were 3,008 / 376 / 94.
+  B8 and B32 measured 1.79x and 1.74x B1 in these single short runs. B8's
+  2.9% lead over B32 is not an established batch-size winner: trajectories and
+  route lengths differ, and there are no repetitions. All seven tiles updated,
+  unevenly. Mean history records rose from 3.43 at B1 to 6.28 at B8 and 6.59
+  at B32 because fixed weights preserve older records longer. B32 tile-apply
+  time was 1.07 s versus B1's 18.38 s; its remaining training time was mostly
+  sequential gather (12.68 s), forward (6.24 s) and prefix construction
+  (4.21 s), plus parameter backward (8.87 s). End-to-end times were 223.4 /
+  202.4 / 186.4 s, dominated by evaluation; B32 evaluated four times while
+  B1/B8 evaluated five, so these totals do not rank training throughput.
+  Detailed receipts and aggregation: `work/core-runs/v2-profile-summary.json`.
+- `tiny-v2-b32-s7-scan-r003-20261102` is the first Stage 4 rate-scan arm:
+  B32, rate 0.003, 64 held-out spans, initial/final evaluation, a 5,400-second
+  training-loop deadline, checkpoints every 100k anchors. The otherwise matched
+  0.017 arm is prepared for a subsequent sequential launch. Final evaluation
+  and checkpointing add time after the loop deadline; actual owner elapsed
+  time and evaluation share must be reported. No rate winner or new quality
+  result is established yet.
 - `work/core-runs/drill-v2` (seed 7, rate 0.003, 128,000 anchors in two launches,
   peak working set 101 MiB): bit-identical to the harness seed-7 evaluation at
   anchor 1,600; 8-16/32 key-swap argmax flips from 80k through 121.6k anchors
