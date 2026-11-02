@@ -3,7 +3,72 @@
 Archived v3 owner-chain, study, comparison and diagnostic sections:
 `../../archive/src/causal/AGENTS-history.md`.
 
-## Core path: causal-latent-v1 (production training)
+## Core v2
+
+The production configuration now selects `causal-latent-v2`. The v1 description
+below records the retained numerical reference; `execution` and `Knobs::core`
+remain that reference for harness and span-scoring contracts. `Config::knobs`
+selects v2: `fit_predictor: false`, `history_ticks: 8`, plus `batch`, `decay`
+and `explore`. All enter one protocol/identity change; v1 checkpoints require
+their original pinned binaries and cannot resume as v2.
+
+`core_batch` builds B consecutive prefixes, routes and conditional corrections
+under fixed weights. History makes this phase sequential: position n+1 needs
+position n's returned correction. It retains the original age-at-most-eight-ticks and version-lag-at-most-one
+policy used by Replay. Under fixed weights this can retain two anchors. The later parameter-gradient backward passes are independent;
+`core_gradients` uses up to four scoped workers over positions, one tile at a
+time. Workers receive and install the complete knobs explicitly. Gradients
+reduce in position order, with repeated frames in forward order; division is
+by the full B, including positions that never visited a tile. Tiles commit in
+ID order, then tied E. Batch one avoids extra reduction arithmetic and worker
+threads, preserving its thread-local float latents. Float mode with B>1 is
+rejected. Batch is bounded to 1..=32; no GPU or larger-model execution is added.
+
+Every position uses the step-start baseline; after commit, baseline updates
+and loss accounting run in position order. Cosine decay is evaluated at the
+first anchor of the step, with constant decay the default. Exploration is a
+pure seed/anchor/depth hash: at depths 1 and above it selects the legal
+neighbor with the fewest cumulative optimizer steps (lowest-ID tie break),
+never halt. Counts are frozen at step start and come from checkpointed Adam
+state. Forced actions retain their route log-probability gradient. Evaluation
+and generation continue using greedy `execution::forward_path` without this
+exploration override.
+
+The predictor is unused by the core forward path: `History::mean` reads only
+corrections. V2 computes no predictor features or fits, emits no feature vectors
+or predictor counters in checkpoints, and omits `predictor.bin`. The common
+State still holds a dormant seeded predictor for compatibility with legacy
+numerical fixtures; restoring v2 reconstructs that unchanged object. This is
+not a claim that its small in-memory allocation has been removed. Legacy local
+execution still uses predictor features and validates their full shape.
+
+`optimizer_steps` counts completed batches; `anchor_tile_commits` counts real
+tile commits. Per-anchor `repeated_visits` remains unchanged. At B=1, commits
+plus revisits equal visits; at B>1, commits are bounded by completed batches
+and unique per-anchor visits. Checkpoint versions cannot exceed optimizer
+steps. An entered batch that fails becomes Poisoned and cannot checkpoint.
+STOP and deadline checks occur between complete batches. Requested terminal
+anchor counts must be divisible by B, so an extended run never begins after
+an implicitly shortened optimizer step. Eval/checkpoint schedules fire on
+crossed intervals without splitting batches; these scheduling fields remain
+outside numerical identity. The train-ahead probe receives every committed
+position's loss in order.
+
+Owner decision 2026-11-02: preserve exact original v1 history behavior and
+DEFER the explicit one-anchor change. Early latent updates do not change trits,
+so v1 initially retains two anchors; the earlier handoff's one-anchor policy
+and exact-from-initialization parity requirement were incompatible. Evaluation
+version 2 and the legacy span-scoring golden remain unchanged. V2 quality still
+requires new frozen evaluations because batched optimization changes training. Phase telemetry measures elapsed
+wall time around the whole gradient scope, not summed worker CPU time.
+
+The batch contracts compare B=1 to v1 over twelve anchors, excluding predictor
+bytes/features while retaining correction history, E, tiles, latents, baseline
+and loss. B=4 compares sequential and threaded execution with non-default
+forward knobs, history on/off, decay and exploration, and checkpoint reload.
+No throughput or quality improvement is implied by these software contracts.
+
+## Core path: causal-latent-v1 (retained reference)
 
 `hexweave train --config <json>` (`core_train`) is the production training path,
 run under `scripts/core_owner.py`. It keeps the v3 forward model unchanged and

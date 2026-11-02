@@ -45,6 +45,11 @@ pub(super) struct Knobs {
     /// Zero history input; skips records, the history push and predictor training; see AGENTS.md §core.
     #[serde(skip_serializing_if = "is_true")]
     pub history: bool,
+    pub batch: u32,
+    pub decay: super::core_schedule::Decay,
+    pub explore: f64,
+    pub history_ticks: u64,
+    pub fit_predictor: bool,
 }
 
 impl Knobs {
@@ -62,6 +67,11 @@ impl Knobs {
         seed: 0,
         float_forward: false,
         history: true,
+        batch: 1,
+        decay: super::core_schedule::Decay::Constant,
+        explore: 0.0,
+        history_ticks: 8,
+        fit_predictor: true,
     };
 
     /// Core path (causal-latent-v1): latent Adam on tiles and E, greedy routes, pinned forward.
@@ -144,7 +154,6 @@ pub(super) fn scoped(knobs: Knobs) -> Scoped {
 }
 
 /// Replace knobs mid-run, continuing draw streams and latent state.
-#[cfg(test)]
 pub(super) fn anneal(knobs: Knobs) {
     KNOBS.with(|cell| cell.set(knobs));
 }

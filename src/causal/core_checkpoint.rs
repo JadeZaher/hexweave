@@ -15,7 +15,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub(super) const PROTOCOL: &str = "causal-latent-v1";
+pub(super) const PROTOCOL: &str = "causal-latent-v2";
 const KEEP: usize = 3;
 
 #[derive(Serialize, Deserialize)]
@@ -102,16 +102,18 @@ pub(super) fn save(
     }
     std::fs::create_dir(&partial)?;
     let (latents, calls) = tuning::export();
-    let payloads = [
+    let mut payloads = vec![
         (
             "state.json",
             serde_json::to_vec(&StateRecord::capture(state)?)?,
         ),
         ("shared.bin", encode_shared(&state.shared)?),
-        ("predictor.bin", encode_predictor(&state.predictor)?),
         ("tiles.bin", encode_tiles(store)?),
         ("latent.bin", encode_latents(&latents)?),
     ];
+    if tuning::current().fit_predictor {
+        payloads.push(("predictor.bin", encode_predictor(&state.predictor)?));
+    }
     let mut files = BTreeMap::new();
     for (file, bytes) in &payloads {
         write_synced(&partial.join(file), bytes)?;
@@ -238,7 +240,11 @@ pub(super) fn load(
         "core checkpoint must be anchor-only without an assay ledger"
     );
     let shared = decode_shared(&read("shared.bin")?, geometry, record.shared_version)?;
-    let predictor = decode_predictor(&read("predictor.bin")?, geometry, record.predictor_version)?;
+    let predictor = if tuning::current().fit_predictor {
+        decode_predictor(&read("predictor.bin")?, geometry, record.predictor_version)?
+    } else {
+        super::predictor::Predictor::new(geometry, record.seed)?
+    };
     let versions = record.tile_versions;
     let state = record.restore(shared, predictor)?;
     ensure!(

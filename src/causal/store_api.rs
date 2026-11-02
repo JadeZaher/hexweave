@@ -6,5 +6,6 @@ use anyhow::Result;
 pub(super) trait TileStore {
     fn versions(&self) -> Result<[u64; TILES]>;
     fn read<T>(&mut self, id: usize, visit: impl FnOnce(&Tile) -> Result<T>) -> Result<T>;
+    #[cfg(test)]
     fn update<T>(&mut self, id: usize, visit: impl FnOnce(&mut Tile) -> Result<T>) -> Result<T>;
 }

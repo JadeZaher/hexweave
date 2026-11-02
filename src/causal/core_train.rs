@@ -14,7 +14,7 @@ use super::core_log::{self, Evaluate, Marks, RecordState, Run};
 use super::core_redeal::CitationRedeal;
 use super::data::Dataset;
 use super::data_contracts::Split;
-use super::execution::{self, TrainingSource};
+use super::execution::TrainingSource;
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
@@ -173,15 +173,18 @@ fn drive<S: TrainingSource>(
         if Instant::now() >= deadline {
             break "deadline";
         }
-        let step = execution::step(&mut state, &mut store, source, false)?;
-        core_log::feed_ahead(&mut ahead, corpus, &step);
+        let before = state.global_opportunity;
+        let steps = super::core_batch::step(&mut state, &mut store, source, true)?;
+        for step in &steps {
+            core_log::feed_ahead(&mut ahead, corpus, step);
+        }
         let n = state.global_opportunity;
-        if n.is_multiple_of(config.checkpoint_every) {
+        if super::core_schedule::crossed(before, n, config.checkpoint_every) {
             telemetry::time(Phase::Checkpoint, || {
                 core_log::checkpoint(&run, &state, &store)
             })?;
         }
-        last = if n.is_multiple_of(config.eval_every) {
+        last = if super::core_schedule::crossed(before, n, config.eval_every) {
             Some(core_log::record(
                 &mut RecordState {
                     log: &mut log,

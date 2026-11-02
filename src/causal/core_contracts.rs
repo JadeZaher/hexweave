@@ -135,7 +135,7 @@ fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
     };
     let reference = identity("schema", json!(1))?;
     assert_eq!(
-        reference, "a32ed6d967e77736ce19b3a0a738c4b33f75b4e22318f32d6a55b204972d98ff",
+        reference, "3deb9cffc7dc59b300050f6834d1c28bb0f309b9163d8ff31b5b5038a81bb5ac",
         "identity formula changed: existing checkpoints will not resume"
     );
     for (field, value, moves) in [
@@ -158,6 +158,13 @@ fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
         ("float_forward", json!(true), true),
         ("history", json!(true), false),
         ("history", json!(false), true),
+        ("batch", json!(4), true),
+        ("explore", json!(0.1), true),
+        (
+            "decay",
+            json!({"kind":"cosine", "anchors":100, "floor":0.1}),
+            true,
+        ),
     ] {
         assert_eq!(identity(field, value)? != reference, moves, "{field}");
     }

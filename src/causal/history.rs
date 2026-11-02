@@ -8,6 +8,7 @@ pub(super) const HISTORY_CAP: usize = 8;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Record {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<f32>,
     pub correction: Vec<f32>,
     pub tile_versions: [u64; TILES],
@@ -25,7 +26,14 @@ pub(super) struct History {
 impl Record {
     pub fn validate(&self, geometry: Geometry) -> Result<()> {
         ensure!(self.tile_id < TILES, "invalid history tile");
-        norm::vector(&self.features, geometry.features())?;
+        if super::tuning::current().fit_predictor {
+            norm::vector(&self.features, geometry.features())?;
+        } else {
+            ensure!(
+                self.features.is_empty(),
+                "v2 history contains predictor features"
+            );
+        }
         norm::vector(&self.correction, geometry.width)?;
         let squared: f64 = self.correction.iter().map(|v| f64::from(*v).powi(2)).sum();
         ensure!(squared <= 1.000002, "history correction exceeds unit bound");
@@ -38,7 +46,7 @@ impl Record {
         }
         opportunity
             .checked_sub(self.opportunity)
-            .is_some_and(|age| age <= 8)
+            .is_some_and(|age| age <= super::tuning::current().history_ticks)
             && near(self.shared_version, shared)
             && self
                 .tile_versions
@@ -49,6 +57,7 @@ impl Record {
 }
 
 impl History {
+    #[cfg(test)]
     pub fn replay(&self) -> &[Record] {
         &self.records[self.records.len().saturating_sub(4)..]
     }

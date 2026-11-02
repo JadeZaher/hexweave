@@ -1,6 +1,6 @@
 # Hexweave status
 
-Updated 2026-10-28 America/Denver. **The core training path is implemented and
+Updated 2026-11-02 America/Denver. **The core training path is implemented and
 is the build; no run is in progress. No useful-assistant result or finite
 training ETA is established.**
 
@@ -8,7 +8,7 @@ training ETA is established.**
 
 | Area | State |
 | --- | --- |
-| Core training | `hexweave train --config <json>` (`src/causal/core_train.rs`): the v3 forward model on the 2,051,840-coefficient candidate with latent-weight Adam, greedy eval-matched routes and an anchor-only schedule; all tiles resident |
+| Core training | `causal-latent-v2`: the 2,051,840-coefficient candidate with fixed-weight batches of 1–32 positions, ordered mean-gradient latent Adam, optional cosine decay and deterministic exploration; all tiles resident. Float training requires batch 1 |
 | Owner | `scripts/core_owner.py`: `work/core-runs/<name>` rule, single-owner lock, pinned binary, 512 MiB Job commit cap, sampled 256 MiB memory floor, graceful STOP with a 180-second grace, start and end receipts |
 | Checkpoints | Hash-manifested and fsynced, newest three kept. Resume identity-checks every readable manifest first, is bit exact, quarantines integrity failures and refuses to restart from anchor 0 when every checkpoint fails. Checkpoints from the `8e7a0eb` binary (earlier identity formula, earlier resume logic) resume only with their pinned `out/bin` copy |
 | Data | `science`: pinned QA dataset, development-split evaluation. `drill` v2: the assay curriculum re-dealt to the harness `Shuffled` stream, with key-swap and attention probes |
@@ -18,6 +18,22 @@ training ETA is established.**
 
 Design and invariants: [core path](../src/causal/AGENTS.md) and
 [core owner](../scripts/AGENTS.md).
+
+Stage 3 step 2 adds at most four scoped gradient workers while preserving the
+sequential forward/correction history dependency. Core predictor fitting and
+checkpoint payloads are removed; legacy numerical fixtures remain test-only.
+Owner decision 2026-11-02: retain the original variable history policy (age at
+most eight ticks and version lag at most one), deferring the proposed explicit
+one-anchor window. That proposal conflicted with exact v1 startup parity:
+before trits change, v1 can retain two anchors.
+
+Independent source review approved the v2 implementation. Batch-one parity
+passes over twelve anchors in all history/float combinations; threaded batch
+four matches sequential execution and checkpoint continuation under non-default
+knobs. The unchanged v1 harness and span golden passed. Re-scoring the saved
+100k history-on checkpoint reproduced 3.3469990231317888 bits/byte and alternate
+3.4310734260737847 exactly. Throughput and Stage 4 quality remain unmeasured
+for v2; these software checks establish neither speedup nor improved learning.
 
 ## Archived
 

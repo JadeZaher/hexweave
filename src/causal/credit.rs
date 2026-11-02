@@ -1,11 +1,16 @@
 use super::execution::{checked_tile, Trace};
+#[cfg(test)]
 use super::geometry::TILES;
 use super::history::Record;
 use super::norm;
 use super::shared::Prefix;
-use super::state::{count, State};
+#[cfg(test)]
+use super::state::count;
+use super::state::State;
 use super::store_api::TileStore;
+#[cfg(test)]
 use super::telemetry::{self, Phase};
+#[cfg(test)]
 use super::tile_gradients::TileGradients;
 use super::tuning;
 use crate::topology::Mesh;
@@ -66,6 +71,7 @@ pub(super) fn gather<S: TileStore>(
     })
 }
 
+#[cfg(test)]
 pub(super) fn anchor<S: TileStore>(
     state: &mut State,
     store: &mut S,
@@ -94,7 +100,7 @@ pub(super) fn anchor<S: TileStore>(
 }
 
 /// Apply tied-E credit under the assay ledger, tuned numerics or the pinned rule.
-fn apply_shared(state: &mut State, gradient: &[f32]) -> Result<usize> {
+pub(super) fn apply_shared(state: &mut State, gradient: &[f32]) -> Result<usize> {
     if let Some(assay) = &mut state.assay {
         let metrics = super::assay_update::apply(
             &mut state.shared,
@@ -114,6 +120,7 @@ fn apply_shared(state: &mut State, gradient: &[f32]) -> Result<usize> {
 }
 
 /// Aggregate repeated visits in forward order, then commit each unique tile once.
+#[cfg(test)]
 fn commit_tiles<S: TileStore>(
     state: &mut State,
     store: &mut S,
@@ -177,10 +184,13 @@ pub(super) fn records(
             .get(index + 1)
             .map_or(trace.output.as_slice(), |next| next.input.as_slice());
         let point = mesh.coordinates()[frame.tile_id];
-        let features =
+        let features = if tuning::current().fit_predictor {
             state
                 .predictor
-                .features(&frame.input, output, &trace.history, point.q, point.r)?;
+                .features(&frame.input, output, &trace.history, point.q, point.r)?
+        } else {
+            Vec::new()
+        };
         records.push(Record {
             features,
             correction: norm::unit_clip(&corrections[index])?,
@@ -193,6 +203,7 @@ pub(super) fn records(
     Ok(records)
 }
 
+#[cfg(test)]
 fn train_records(
     state: &mut State,
     trace: &Trace,

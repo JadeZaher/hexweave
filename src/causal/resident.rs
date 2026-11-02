@@ -41,6 +41,7 @@ impl TileStore for ResidentStore {
         visit(&self.tiles[id])
     }
 
+    #[cfg(test)]
     fn update<T>(&mut self, id: usize, visit: impl FnOnce(&mut Tile) -> Result<T>) -> Result<T> {
         visit(&mut self.tiles[id])
     }

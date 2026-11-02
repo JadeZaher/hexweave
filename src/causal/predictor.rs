@@ -68,6 +68,7 @@ impl Predictor {
             .collect())
     }
 
+    #[cfg(test)]
     pub fn predict(&self, features: &[f32]) -> Result<Vec<f32>> {
         norm::vector(features, self.geometry.features())?;
         let mut output = norm::project(
@@ -81,10 +82,12 @@ impl Predictor {
         Ok(output)
     }
 
+    #[cfg(test)]
     pub fn correction(&self, features: &[f32]) -> Result<Vec<f32>> {
         norm::unit_clip(&self.predict(features)?)
     }
 
+    #[cfg(test)]
     pub fn train_joint(
         &mut self,
         pairs: &[(&[f32], &[f32])],

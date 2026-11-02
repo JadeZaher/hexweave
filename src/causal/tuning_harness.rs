@@ -54,6 +54,7 @@ fn knobs(seed: u64) -> Result<Knobs> {
         seed,
         float_forward: false,
         history: true,
+        ..Knobs::PINNED
     })
 }
 

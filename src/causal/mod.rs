@@ -12,6 +12,7 @@ mod checkpoint_state;
 mod child_io;
 mod config;
 mod core_ahead;
+mod core_batch;
 mod core_best;
 mod core_checkpoint;
 mod core_codec;
@@ -19,8 +20,11 @@ mod core_config;
 mod core_corpus;
 mod core_drill;
 mod core_eval;
+mod core_gradients;
 mod core_log;
 mod core_redeal;
+mod core_route;
+mod core_schedule;
 mod core_train;
 mod credit;
 mod cursor;
@@ -31,6 +35,8 @@ mod data_io;
 mod data_provenance;
 mod evaluation;
 mod execution;
+#[cfg(test)]
+mod execution_legacy;
 mod ffn;
 mod generation;
 mod geometry;
@@ -39,6 +45,7 @@ mod immutable;
 mod norm;
 mod positions;
 mod predictor;
+#[cfg(test)]
 mod predictor_joint;
 mod pulse;
 mod replay;
@@ -64,9 +71,13 @@ mod assay_contracts;
 #[cfg(test)]
 mod attention_contracts;
 #[cfg(test)]
+mod core_batch_contracts;
+#[cfg(test)]
 mod core_contracts;
 #[cfg(test)]
 mod core_redeal_contracts;
+#[cfg(test)]
+mod core_reproduction_contract;
 #[cfg(test)]
 mod core_resume_contracts;
 #[cfg(test)]

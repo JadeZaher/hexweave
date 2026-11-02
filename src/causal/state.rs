@@ -130,6 +130,18 @@ impl State {
             masks == Some(self.cursor.supervised_targets),
             "target mask partition mismatch"
         );
+        if !super::tuning::current().fit_predictor {
+            ensure!(
+                self.anchor_only
+                    && self.assay.is_none()
+                    && self.shared.version <= self.counters.optimizer_steps
+                    && self
+                        .tile_versions
+                        .iter()
+                        .all(|version| *version <= self.counters.optimizer_steps),
+                "v2 version exceeds optimizer steps"
+            );
+        }
         let predictor_updates = self
             .counters
             .predictor_anchor_updates

@@ -59,6 +59,16 @@ pub(super) struct Config {
         skip_serializing_if = "is_default_eval_spans"
     )]
     pub eval_spans: usize,
+    #[serde(default = "default_batch")]
+    pub batch: u32,
+    #[serde(default)]
+    pub decay: super::core_schedule::Decay,
+    #[serde(default)]
+    pub explore: f64,
+}
+
+fn default_batch() -> u32 {
+    1
 }
 
 fn default_true() -> bool {
@@ -79,6 +89,7 @@ fn is_default_eval_spans(value: &usize) -> bool {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        super::core_schedule::validate(self)?;
         ensure!(self.schema == 1, "core config schema must be 1");
         let parts: Vec<Component<'_>> = self.out.components().collect();
         ensure!(
@@ -116,6 +127,11 @@ impl Config {
         Knobs {
             float_forward: self.float_forward,
             history: self.history,
+            batch: self.batch,
+            decay: self.decay,
+            explore: self.explore,
+            history_ticks: 8,
+            fit_predictor: false,
             ..Knobs::core(self.rate, self.seed)
         }
     }

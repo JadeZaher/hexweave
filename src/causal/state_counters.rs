@@ -1,4 +1,5 @@
 use super::geometry::{Geometry, MATRIX_COUNT, TILES};
+#[cfg(test)]
 use super::predictor_joint::Update;
 use super::state::count;
 use super::tuning;
@@ -9,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub(super) struct Counters {
     pub anchors: u64,
+    #[serde(default)]
+    pub optimizer_steps: u64,
     pub local_opportunities: u64,
     pub visits: u64,
     pub repeated_visits: u64,
@@ -21,16 +24,30 @@ pub(super) struct Counters {
     pub local_tile_updates: u64,
     pub tile_transitions: [u64; MATRIX_COUNT],
     pub shared_transitions: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_anchor_updates: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_replay_updates: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_anchor_pairs: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_replay_pairs: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_transitions: u64,
+    #[serde(default, skip_serializing_if = "is_zero_float")]
     pub predictor_mse_sum: f64,
     pub anchor_loss_sum: f64,
     pub history_pruned: u64,
     pub history_peak: usize,
     pub maximum_prefix_bytes: usize,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_zero_float(value: &f64) -> bool {
+    value.to_bits() == 0
 }
 
 impl Counters {
@@ -72,6 +89,7 @@ impl Counters {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn predictor(&mut self, update: Update, replay: bool) -> Result<()> {
         ensure!(
             (1..=4).contains(&update.pair_mse.len())
@@ -153,7 +171,32 @@ impl Counters {
         // `tuning::Knobs::history` off: `credit::anchor` never calls `train_records`, so no
         // anchor pair/update is ever produced and `History` stays empty; see AGENTS.md §State
         // encoding. On, this is the original anchors-equal-updates invariant unchanged.
-        if tuning::current().history {
+        if !tuning::current().fit_predictor {
+            let batch = u64::from(tuning::current().batch);
+            ensure!(
+                assay
+                    && batch > 0
+                    && self.optimizer_steps.checked_mul(batch) == Some(self.anchors)
+                    && self.anchor_tile_commits >= self.optimizer_steps
+                    && self.anchor_tile_commits
+                        <= self.optimizer_steps.saturating_mul(TILES as u64)
+                    && self.anchor_tile_commits <= self.visits - self.repeated_visits
+                    && self.predictor_anchor_updates == 0
+                    && self.predictor_anchor_pairs == 0
+                    && self.predictor_replay_updates == 0
+                    && self.predictor_replay_pairs == 0
+                    && self.predictor_transitions == 0
+                    && self.predictor_mse_sum == 0.0
+                    && (tuning::current().history || history_empty),
+                "v2 optimizer/history counters mismatch"
+            );
+            if batch == 1 {
+                ensure!(
+                    self.anchor_tile_commits.checked_add(self.repeated_visits) == Some(self.visits),
+                    "v2 single-anchor visit accounting mismatch"
+                );
+            }
+        } else if tuning::current().history {
             ensure!(
                 self.predictor_anchor_updates == self.anchors
                     && self.predictor_anchor_pairs >= self.anchors
@@ -172,7 +215,10 @@ impl Counters {
                     && self.predictor_anchor_pairs == 0
                     && history_empty
                     && self.anchor_tile_commits >= self.anchors
-                    && self.anchor_tile_commits <= self.anchors.saturating_mul(4),
+                    && self.anchor_tile_commits <= self.visits
+                    && (!assay
+                        || self.anchor_tile_commits.checked_add(self.repeated_visits)
+                            == Some(self.visits)),
                 "history-off predictor/history counters mismatch"
             );
         }

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HistoryRecord {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     feature_bits: Vec<u32>,
     correction_bits: Vec<u32>,
     tile_versions: [u64; TILES],
@@ -29,11 +30,13 @@ pub(super) struct StateRecord {
     pub global_opportunity: u64,
     baseline_bits: u32,
     pub shared_version: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub predictor_version: u64,
     pub tile_versions: [u64; TILES],
     history: Vec<HistoryRecord>,
     pub cursor: Cursor,
     counters: Counters,
+    #[serde(default, skip_serializing_if = "is_zero")]
     predictor_mse_bits: u64,
     anchor_loss_bits: u64,
     #[serde(
@@ -54,6 +57,10 @@ fn schema(assay: bool, anchor_only: bool) -> Result<u32> {
         (false, true) => Ok(3),
         (false, false) => Ok(1),
     }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl StateRecord {
@@ -119,7 +126,12 @@ impl StateRecord {
         let mut records = Vec::with_capacity(self.history.len());
         for record in self.history {
             ensure!(
-                record.feature_bits.len() == self.geometry.features()
+                record.feature_bits.len()
+                    == if super::tuning::current().fit_predictor {
+                        self.geometry.features()
+                    } else {
+                        0
+                    }
                     && record.correction_bits.len() == self.geometry.width,
                 "checkpoint history shape mismatch"
             );
