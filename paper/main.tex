@@ -57,8 +57,8 @@ inverse-square-root rate decay plateaued between the byte bigram and unigram lev
 and visit-frequency eviction left the learning curve unchanged and cut bytes written by about 75$\times$
 in 30-minute pilots. Replacing the global decay with per-tile warm restarts triggered by accumulated
 parameter change produced a run whose windowed held-out mean fell to 2.65~\bpb{} at 1.0--1.2M training
-positions (best single evaluation to date 2.546), below the matched-exposure bigram (3.31), with about 50\,MB
-peak working set and 8.5\,GB written. That run is still in progress. We state an unresolved confound
+positions (best single evaluation 2.476), below the matched-exposure bigram (3.31), with about 50\,MB
+peak working set; it ended at its 24-hour budget after 1,691,199 positions with a last evaluation of 2.563 and about 11\,GB written. We state an unresolved confound
 plainly: the restart thresholds sat at their lower clamp, so the busiest tiles trained near full rate,
 and our experiments do not yet separate a benefit of restarts from the original decay being too fast.
 \end{abstract}
@@ -100,7 +100,7 @@ byte level), and one model size (2,051,840 coefficients). We report:
   two 30-minute pilots, plus two ablations run on it (Section~\ref{sec:paging}).
   \item A round of 30-minute rate pilots comparing a per-tile rate floor, fixed-threshold warm
   restarts and adaptive warm restarts (Section~\ref{sec:rate}).
-  \item A long run with adaptive per-tile warm restarts that passed the bigram and is still training
+  \item A long run with adaptive per-tile warm restarts that passed the bigram
   (Section~\ref{sec:long}), and the confound that prevents us from attributing its gain
   (Section~\ref{sec:confound}).
   \item Mechanisms that are implemented but not yet evaluated: separate per-tile
@@ -433,7 +433,7 @@ writes, wrote 3.70\,TB and read 4.6\,TB, and spent 18,229\,s, 22\% of the run, i
 \addlegendentry{Global decay, 24 h (12-eval mean)}
 \addplot[very thick, restartcol]
   table[x expr=\thisrow{anchors}/1e6, y=mean_bpb, col sep=comma]{data/adaptive_restarts_mean.csv};
-\addlegendentry{Dynamic restarts, cap 3 (12-eval mean; ongoing)}
+\addlegendentry{Dynamic restarts, cap 3 (12-eval mean)}
 \addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {4.414};
 \addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {3.31};
 \addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {2.57};
@@ -447,8 +447,7 @@ writes, wrote 3.70\,TB and read 4.6\,TB, and spent 18,229\,s, 22\% of the run, i
 \caption{Held-out bits per byte for the two long runs. Faint points are single evaluations
 (1,024 bytes each); thick lines are 12-evaluation moving means. Horizontal lines are yardsticks
 from Table~\ref{tab:yardsticks}; the reference path is a different (non-paged, batched) training
-path, shown only for scale. The dynamic-restart run is still in progress; its points extend to the
-latest exported evaluation (1,531,904 anchors).}
+path, shown only for scale. The dynamic-restart run ended at 1,691,199 anchors.}
 \label{fig:main}
 \end{figure}
 
@@ -506,6 +505,7 @@ Run & Anchors & Written & I/O time & Per anchor \\
 Pilot, old store ($R=4$, eager) & 30 min & 28.9\,GB & 158\,s & -- \\
 Pilot, new store ($R=6$, $W=3$) & 30 min & 0.38\,GB & 3.3\,s & -- \\
 Long run, new store, first 1.3M & 1,300,740 & 8.5\,GB & -- & $\approx$6.5\,kB \\
+Long run, new store, whole run & 1,691,199 & 11.0\,GB & -- & $\approx$6.5\,kB \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -598,13 +598,13 @@ restarted tile restarted on average about once every 260 anchors, whereas the gl
 have had under global decay.
 
 The run was interrupted at 1,300,740 anchors when other programs pushed host available memory below the
-owner's floor; the trainer's own peak was 54\,MB. It was resumed from its verified checkpoint. It is still running as this is written, so its endpoint is not reported. The series in \code{paper/data/} and Table~\ref{tab:windows} run to 1{,}531{,}904 anchors; over that span the windowed mean kept falling, and the best single evaluation was 2.546 at 1{,}482{,}752 anchors. Totals for bytes written, I/O time and per-tile restart statistics are given at 1.3M anchors, the last point at which a complete report was written.
+owner's floor; the trainer's own peak was 54\,MB. It was resumed from its verified checkpoint. It ended at its 24-hour training budget after 1,691,199 anchors (about 20 anchors/s in the final segment). The last evaluation was 2.563 \bpb{} and the best single evaluation was 2.476 at 1,622,016 anchors; the windowed mean was 2.623 at 1.4--1.6M and 2.557 over the final 1.6--1.69M (Table~\ref{tab:windows}). Summed over its segments the run wrote about 11.0\,GB. At the end, restarts per tile ranged from 888 to 6,481, bars from 0.29 to 0.67 (lower clamp 0.25), rate factors from 0.63 to 0.94 and per-tile master RMS from 1.44 to 2.47; visits per tile ranged from 2.55M to 251k.
 
 \begin{table}[t]
 \centering
 \caption{Windowed means of held-out \bpb: the mean of all evaluations whose anchor count $a$
 satisfies $\text{lo}\le a<\text{hi}$, computed from the exported series in \code{paper/data/}. The
-dynamic-restart run is in progress; its last window is partial.}
+final window of each run is partial.}
 \label{tab:windows}
 \begin{tabular}{lrr}
 \toprule
@@ -617,12 +617,12 @@ Anchors & Global decay, 24 h & Dynamic restarts, cap 3 \\
 800k--1.0M & 3.393 & 2.778 \\
 1.0--1.2M & 3.375 & 2.650 \\
 1.2--1.4M & 3.372 & 2.621 \\
-1.4--1.6M & 3.374 & 2.627 (to 1.53M) \\
-1.6--1.8M & 3.354 & -- \\
+1.4--1.6M & 3.374 & 2.623 \\
+1.6--1.8M & 3.354 & 2.557 (to 1.69M) \\
 1.8M--end & 3.404 & -- \\
 \midrule
-Best single evaluation & 3.271 (1.74M) & 2.546 (1.48M) \\
-Last evaluation & 3.436 (1.86M) & 2.609 (1.53M, in progress) \\
+Best single evaluation & 3.271 (1.74M) & 2.476 (1.62M) \\
+Last evaluation & 3.436 (1.86M) & 2.563 (1.69M) \\
 \bottomrule
 \end{tabular}
 \end{table}

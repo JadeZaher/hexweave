@@ -8,9 +8,9 @@ one from local credit, trading training time and some per-step quality for bound
 residency.
 
 **Where it stands (CPU, one seed, one small corpus):** a 2.05M-coefficient
-byte-level model with 6 of 7 tiles resident reached a held-out mean of about 2.65
-bits/byte on TinyStories at 1.0–1.2M training positions, in about 50 MB of working
-memory and 8.5 GB of SSD writes. A matched bigram scores 3.31 and the project's own
+byte-level model with 6 of 7 tiles resident reached a held-out mean of about 2.56
+bits/byte on TinyStories over its last 100k of 1.69M training positions, in about
+50 MB of working memory and 11 GB of SSD writes. A matched bigram scores 3.31 and the project's own
 non-paged reference path 2.216. These are early research results, not a trained
 assistant; the [paper](paper/main.pdf) states the method, measurements and limits.
 
