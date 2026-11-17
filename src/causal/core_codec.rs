@@ -2,10 +2,15 @@
 
 use super::geometry::{Geometry, TILES};
 use super::resident::ResidentStore;
-use super::state_codec::{decode_tile, encode_tile};
-use super::tuning::{Latent, Latents};
+use super::state_codec::decode_tile;
+#[cfg(test)]
+use super::state_codec::encode_tile;
+#[cfg(test)]
+use super::tuning::Latent;
+use super::tuning::Latents;
 use anyhow::{ensure, Context, Result};
 
+#[cfg(test)]
 pub(super) fn encode_tiles(store: &ResidentStore) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     for tile in &store.tiles {
@@ -32,6 +37,7 @@ pub(super) fn decode_tiles(
 }
 
 /// Count, then per entry: owner, matrix, step, length, weights, interleaved moments.
+#[cfg(test)]
 pub(super) fn encode_latents(latents: &[((usize, usize), Latent)]) -> Result<Vec<u8>> {
     let mut bytes = (latents.len() as u64).to_le_bytes().to_vec();
     for ((owner, matrix), latent) in latents {
@@ -71,15 +77,18 @@ pub(super) fn decode_latents(bytes: &[u8]) -> Result<Latents> {
                 .is_some_and(|needed| needed <= reader.remaining()),
             "latent payload shorter than its declared length"
         );
-        let mut values = Vec::with_capacity(total);
-        for _ in 0..total {
-            values.push(f32::from_le_bytes(reader.take(4)?.try_into()?));
+        let mut weights = Vec::with_capacity(length);
+        for _ in 0..length {
+            weights.push(f32::from_le_bytes(reader.take(4)?.try_into()?));
         }
-        let moments = values.split_off(length);
+        let mut moments = Vec::with_capacity(total - length);
+        for _ in length..total {
+            moments.push(f32::from_le_bytes(reader.take(4)?.try_into()?));
+        }
         latents.push((
             (owner, matrix),
             Latent {
-                weights: values,
+                weights,
                 moments,
                 step,
             },
@@ -114,5 +123,36 @@ impl Reader<'_> {
 
     fn remaining(&self) -> usize {
         self.bytes.len() - self.offset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latent_roundtrip_preserves_bits_and_rejects_truncation() -> Result<()> {
+        let values = vec![
+            (
+                (3, 0),
+                Latent {
+                    weights: vec![-0.0, f32::from_bits(0x7fc0_1234)],
+                    moments: vec![1.0, -2.0, 0.0, 4.0],
+                    step: 9,
+                },
+            ),
+            (
+                (3, 1),
+                Latent {
+                    weights: vec![],
+                    moments: vec![],
+                    step: 0,
+                },
+            ),
+        ];
+        let encoded = encode_latents(&values)?;
+        assert_eq!(encode_latents(&decode_latents(&encoded)?)?, encoded);
+        assert!(decode_latents(&encoded[..encoded.len() - 1]).is_err());
+        Ok(())
     }
 }

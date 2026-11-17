@@ -14,6 +14,11 @@ pub(super) trait TrainingSource {
     fn pending_prefix(&self, cursor: &Cursor) -> Result<Vec<u8>>;
     fn anchor_target(&self, cursor: &Cursor) -> Result<AnchorTarget>;
     fn advance_anchor(&self, cursor: &mut Cursor) -> Result<()>;
+
+    /// Rebuilds the cursor of an earlier training anchor for replay; sources refuse by default.
+    fn replay_cursor(&self, _supervised_targets: u64) -> Result<Cursor> {
+        anyhow::bail!("training source cannot replay past anchors")
+    }
 }
 
 pub(super) struct Frame {

@@ -1,5 +1,4 @@
-//! Core training path (`hexweave train --config`): latent Adam, greedy routes, anchor-only,
-//! resident model, hash-manifested resumable checkpoints. See AGENTS.md §core.
+//! Resident core training and resumable checkpoints; start with STUDY.md and AGENTS.md.
 
 use super::assay_source::Source as AssaySource;
 use super::assay_state::MANIFEST_SHA;
@@ -29,6 +28,9 @@ use std::time::{Duration, Instant};
 pub(super) fn run(path: &Path) -> Result<Value> {
     let config: Config = serde_json::from_slice(&std::fs::read(path)?)?;
     config.validate()?;
+    if config.connected.is_some() {
+        return super::connected_train::run(&config);
+    }
     std::fs::create_dir_all(&config.out)?;
     tuning::install(config.knobs());
     let geometry = Geometry::candidate();

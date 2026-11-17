@@ -1,8 +1,11 @@
+//! A bounded, detached correction memory, not token activations or a KV cache; see STUDY.md.
+
 use super::geometry::{Geometry, TILES};
 use super::norm;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
+/// Capacity counts route-frame records, not anchors or input bytes.
 pub(super) const HISTORY_CAP: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -40,6 +43,7 @@ impl Record {
         Ok(())
     }
 
+    /// Keep age-bounded records only while every tile and E are at most one version ahead.
     pub fn compatible(&self, opportunity: u64, versions: &[u64; TILES], shared: u64) -> bool {
         fn near(old: u64, current: u64) -> bool {
             current.checked_sub(old).is_some_and(|lag| lag <= 1)
@@ -109,6 +113,7 @@ impl History {
         before - self.records.len()
     }
 
+    /// Average route-frame corrections; anchors with more retained visits contribute more terms.
     pub fn mean(&self, geometry: Geometry) -> Result<Vec<f32>> {
         let mut mean = vec![0.0; geometry.width];
         if self.records.is_empty() {

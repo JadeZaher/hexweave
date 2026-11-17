@@ -50,6 +50,13 @@ pub(super) struct Knobs {
     pub explore: f64,
     pub history_ticks: u64,
     pub fit_predictor: bool,
+    /// Enable the connected protocol's memory-conditioned curve.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connected: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connected_fp32: bool,
+    #[serde(skip_serializing_if = "super::connected_config::SliceMode::is_default")]
+    pub slice_mode: super::connected_config::SliceMode,
 }
 
 impl Knobs {
@@ -72,6 +79,9 @@ impl Knobs {
         explore: 0.0,
         history_ticks: 8,
         fit_predictor: true,
+        connected: false,
+        connected_fp32: false,
+        slice_mode: super::connected_config::SliceMode::Full,
     };
 
     /// Core path (causal-latent-v1): latent Adam on tiles and E, greedy routes, pinned forward.
@@ -153,6 +163,16 @@ pub(super) fn scoped(knobs: Knobs) -> Scoped {
     Scoped
 }
 
+/// Switch connected slice mode only, keeping latents and draws.
+pub(super) fn set_slice_mode(slice_mode: super::connected_config::SliceMode) {
+    KNOBS.with(|cell| {
+        cell.set(Knobs {
+            slice_mode,
+            ..cell.get()
+        })
+    });
+}
+
 /// Replace knobs mid-run, continuing draw streams and latent state.
 pub(super) fn anneal(knobs: Knobs) {
     KNOBS.with(|cell| cell.set(knobs));
@@ -162,7 +182,8 @@ pub(super) fn anneal(knobs: Knobs) {
 // `tuning_update.rs` (see AGENTS.md §Numerics profile); re-exported so existing `tuning::`
 // call sites are unchanged.
 #[cfg(test)]
-pub(super) use super::tuning_update::ripple_latents;
+pub(super) use super::tuning_update::{export, ripple_latents};
 pub(super) use super::tuning_update::{
-    export, hash, import, steps, update, with_float, Latent, Latents,
+    hash, import, steps, update, with_float, with_latents, Latent, Latents,
 };
+pub(super) use super::tuning_update::{put_tile, take_tile};

@@ -1,8 +1,11 @@
+//! Learned neighbor-or-halt scores and detached policy credit; see STUDY.md.
+
 use super::norm;
 use super::tile::Tile;
 use super::tile_gradients::{self as grad, TileGradients, P, ROUTER};
 use anyhow::{ensure, Result};
 
+/// Score normalized output plus correction history, with a learned pulse bias.
 pub(super) fn probabilities(
     tile: &Tile,
     output: &[f32],
@@ -46,6 +49,7 @@ pub(super) fn choose(probabilities: &[f32], random: &mut Option<u64>) -> Result<
         }
         Ok(probabilities.len() - 1)
     } else {
+        // Core routing is greedy; equal scores select the lowest legal action index.
         Ok(probabilities
             .iter()
             .enumerate()
@@ -71,6 +75,7 @@ pub(super) fn policy(
         selected < r && advantage.is_finite(),
         "invalid detached policy observation"
     );
+    // Detached score-function credit: (loss - baseline) * grad(log p[selected]).
     let mut score = probabilities(tile, output, heads, history)?;
     for (index, value) in score.iter_mut().enumerate() {
         *value = advantage
@@ -89,6 +94,7 @@ pub(super) fn policy(
         &features,
         (2.0 * d as f32).sqrt().recip(),
     )?;
+    // Policy credit updates ROUTER and P's route rows, not U or upstream state.
     grad::add_outer(
         &mut gradient.values[P][2 * d * d..],
         &score,

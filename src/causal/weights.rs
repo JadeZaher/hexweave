@@ -98,11 +98,37 @@ fn transpose(
 impl Tile {
     /// `scale * W x` for matrix `index`.
     pub fn project(&self, index: usize, input: &[f32], scale: f32) -> Result<Vec<f32>> {
+        if let Some(weights) =
+            super::connected_precision::matrix(&self.weights, index, self.version)?
+        {
+            let mut out = rows_product(
+                weights,
+                self.matrices[index].cols(),
+                0,
+                self.matrices[index].rows(),
+                input,
+            )?;
+            norm::scale_in_place(&mut out, scale)?;
+            return Ok(out);
+        }
         project((self.id, index), &self.matrices[index], input, scale)
     }
 
     /// `scale * W^T x` for matrix `index`.
     pub fn transpose(&self, index: usize, input: &[f32], scale: f32) -> Result<Vec<f32>> {
+        if let Some(weights) =
+            super::connected_precision::matrix(&self.weights, index, self.version)?
+        {
+            let mut out = rows_transpose(
+                weights,
+                self.matrices[index].cols(),
+                0,
+                self.matrices[index].rows(),
+                input,
+            )?;
+            norm::scale_in_place(&mut out, scale)?;
+            return Ok(out);
+        }
         transpose((self.id, index), &self.matrices[index], input, scale)
     }
 
@@ -115,6 +141,11 @@ impl Tile {
         input: &[f32],
     ) -> Result<Vec<f32>> {
         let matrix = &self.matrices[index];
+        if let Some(weights) =
+            super::connected_precision::matrix(&self.weights, index, self.version)?
+        {
+            return rows_product(weights, matrix.cols(), start, count, input);
+        }
         tuning::with_float((self.id, index), |w| {
             rows_product(w, matrix.cols(), start, count, input)
         })
@@ -130,6 +161,11 @@ impl Tile {
         input: &[f32],
     ) -> Result<Vec<f32>> {
         let matrix = &self.matrices[index];
+        if let Some(weights) =
+            super::connected_precision::matrix(&self.weights, index, self.version)?
+        {
+            return rows_transpose(weights, matrix.cols(), start, count, input);
+        }
         tuning::with_float((self.id, index), |w| {
             rows_transpose(w, matrix.cols(), start, count, input)
         })
@@ -138,6 +174,14 @@ impl Tile {
 
     /// Element `element` of matrix `index` (the activation-curve offsets).
     pub fn weight(&self, index: usize, element: usize) -> Result<f32> {
+        if let Some(weights) =
+            super::connected_precision::matrix(&self.weights, index, self.version)?
+        {
+            return weights
+                .get(element)
+                .copied()
+                .context("explicit weight index out of bounds");
+        }
         match tuning::with_float((self.id, index), |w| w.get(element).copied()) {
             Some(value) => value.context("float weight index out of bounds"),
             None => Ok(f32::from(self.matrices[index].value(element)?)),
@@ -149,6 +193,13 @@ impl Shared {
     /// Column `index` of the tied embedding E (one byte's vector).
     pub fn embedding_column(&self, index: usize) -> Result<Vec<f32>> {
         let (rows, cols) = (self.embedding.rows(), self.embedding.cols());
+        if let Some(weights) = super::connected_precision::matrix(&self.weights, 0, self.version)? {
+            ensure!(
+                index < cols && weights.len() == rows * cols,
+                "explicit embedding shape"
+            );
+            return Ok((0..rows).map(|row| weights[row * cols + index]).collect());
+        }
         match tuning::with_float((TILES, 0), |w| -> Result<Vec<f32>> {
             ensure!(
                 index < cols && w.len() == rows * cols,
@@ -163,11 +214,33 @@ impl Shared {
 
     /// `scale * E x`.
     pub fn embedding_project(&self, input: &[f32], scale: f32) -> Result<Vec<f32>> {
+        if let Some(weights) = super::connected_precision::matrix(&self.weights, 0, self.version)? {
+            let mut out = rows_product(
+                weights,
+                self.embedding.cols(),
+                0,
+                self.embedding.rows(),
+                input,
+            )?;
+            norm::scale_in_place(&mut out, scale)?;
+            return Ok(out);
+        }
         project((TILES, 0), &self.embedding, input, scale)
     }
 
     /// `scale * E^T x` (the readout logits).
     pub fn embedding_transpose(&self, input: &[f32], scale: f32) -> Result<Vec<f32>> {
+        if let Some(weights) = super::connected_precision::matrix(&self.weights, 0, self.version)? {
+            let mut out = rows_transpose(
+                weights,
+                self.embedding.cols(),
+                0,
+                self.embedding.rows(),
+                input,
+            )?;
+            norm::scale_in_place(&mut out, scale)?;
+            return Ok(out);
+        }
         transpose((TILES, 0), &self.embedding, input, scale)
     }
 }

@@ -1,5 +1,27 @@
 # Independent review record
 
+## Connected v5.4 anchor-route credit and `(input, tile_id)` windowed FFN slicing, 2026-11-11 UTC
+
+Author implemented `connected.credit_mode` (`lanes`, `anchor_exact`,
+`anchor_predicted`, `hybrid`) and `connected.slice_mode` (`full`, `windowed`,
+`hybrid`) across `src/causal/connected_config.rs`, `src/causal/ffn.rs`,
+`src/causal/connected_step.rs`, `src/causal/connected_lanes.rs`, and
+`src/causal/connected_lane_apply.rs`, plus unit/contract coverage in
+`src/causal/connected_curve_contracts.rs`. An independent read-only review
+inspected all modified Rust files and documentation before validation and found
+three numerical issues, all fixed prior to the integrated sweep:
+
+| Finding | Resolution |
+| --- | --- |
+| `CreditMode::Hybrid` passed `use_trust = false` to `Accumulator::apply_with_trust`, giving unit gain `1.0` to lane-only tiles | Added `Accumulator::add_exact` (`exact: [bool; TILES]`) so `Hybrid` scales exact-seeded tiles by `Lambert(gain)` and lane-only tiles by `Lambert(gain) * trust`, while `AnchorExact` uses unit gain `1.0` |
+| `CreditMode::AnchorPredicted` passed post-update `local_prefix` to `run_anchor_predicted` | Passed pre-update `anchor_prefix` and `observed_target`, computing `local_prefix` only when `credit_mode.uses_lanes()` |
+| `ffn::seed` used `((2 * i) % 62)` over `take(32)`, wrapping `i = 31` onto bit 0 | Changed shift to `(2 * i)` (`0..=62`, valid for `u64`) |
+
+Integrated validation in `work/validation/b46b9583270a4cd999d2a1debc117527` passed
+all 9 stages (structure, format, strict Clippy, 151 Rust tests with 3 ignored, 26
+Python tests, three planning profiles, smoke). Sequential pilot evidence is
+recorded in [STATUS.md](STATUS.md).
+
 ## SIMD and disk-local text extension, 2026-10-24 UTC
 
 Two author lanes implemented SIMD/fixture optimizations and the text/store/owner

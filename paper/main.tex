@@ -1,0 +1,817 @@
+% Hexweave: bounded-residency continual training of a paged byte-level language model on a CPU.
+% Build: see README.md in this directory.
+\documentclass[10pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,positioning,arrows.meta,fit,calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage[colorlinks=true,linkcolor=black!70!blue,citecolor=black!60!green,urlcolor=black!70!blue]{hyperref}
+\hypersetup{pdftitle={Training a Paged Language Model under a Fixed Memory Budget},pdfauthor={Jade Zaher}}
+
+% Values that depend on the long run still in progress (Section 5.4). Fill these in when it ends.
+\newcommand{\pending}[1]{\textcolor{red!75!black}{\fbox{\textsf{\footnotesize TODO: #1}}}}
+
+\newcommand{\bpb}{bits/byte}
+\captionsetup{font=small}
+\newcommand{\nohyphens}{\hyphenpenalty=10000\exhyphenpenalty=10000\relax}
+\setlength{\bibsep}{1pt plus 1pt}
+\renewcommand{\bibfont}{\footnotesize}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\definecolor{decaycol}{RGB}{200,90,30}
+\definecolor{restartcol}{RGB}{30,90,180}
+
+\title{Training a Paged Language Model under a Fixed Memory Budget:\\
+Bounded-Residency, Per-Tile Continual Updates on a Desktop CPU}
+\author{Jade Zaher}
+\date{November 2026 \\ {\small Working paper; results from a single seed on one small corpus.}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We want to train a language model whose parameter count is not capped by RAM: the user chooses a
+memory budget, the model's parameters and optimizer state live on disk in independent blocks, and
+learning is online and local, so that each training position updates only the blocks it used. We
+accept slower training and some loss of per-step quality in exchange for bounded residency and
+real-time updating. This paper reports the first measurements of such a system, Hexweave's
+\emph{connected} path, on a commodity desktop CPU. A byte-level model of 2,051,840 coefficients is
+split into seven \emph{tiles} on a hexagonal grid; a learned router sends each prediction through at
+most four tiles; tiles and their Adam state are paged between an SSD and a bounded resident set; and
+each training position takes one exact-gradient Adam step on the tiles its route visited. On
+TinyStories (seed 7, 1,024 held-out bytes per evaluation), a 24-hour run with a global
+inverse-square-root rate decay plateaued between the byte bigram and unigram levels (windowed means
+3.35--3.41~\bpb) while writing 3.70\,TB to disk. Replacing eager eviction with a write-behind buffer
+and visit-frequency eviction left the learning curve unchanged and cut bytes written by about 75$\times$
+in 30-minute pilots. Replacing the global decay with per-tile warm restarts triggered by accumulated
+parameter change produced a run whose windowed held-out mean fell to 2.65~\bpb{} at 1.0--1.2M training
+positions (best single evaluation to date 2.546), below the matched-exposure bigram (3.31), with about 50\,MB
+peak working set and 8.5\,GB written. That run is still in progress. We state an unresolved confound
+plainly: the restart thresholds sat at their lower clamp, so the busiest tiles trained near full rate,
+and our experiments do not yet separate a benefit of restarts from the original decay being too fast.
+\end{abstract}
+
+\section{Introduction}
+
+\paragraph{Goal.}
+The parameter count of a model trained on a single machine is usually bounded by memory: weights,
+gradients and optimizer moments must all be addressable during each step. Offloading systems move
+some of that state to host memory or NVMe~\citep{ren2021zerooffload,rajbhandari2021zeroinfinity}, but
+they still perform a global step over every parameter for every batch, so traffic and time scale
+with the whole model. We ask a different question: \emph{can a language model be trained on
+commodity hardware under a memory budget the user chooses, independent of its total parameter
+count, with updates that are local (touching only the parameters a training position actually used)
+and continual (one position at a time, no epochs or global synchronization)?} We are willing to pay
+for this in training time and in some per-step quality. In exchange we want two properties that
+conventional training does not offer: resident memory that stays bounded as the model grows, and a
+model that can keep learning in real time from the text it sees.
+
+\paragraph{Approach.}
+Hexweave splits a byte-level model into \emph{tiles}, small self-contained blocks with their own
+attention, feed-forward network, router and optimizer state, laid out on an axial hexagonal grid. A
+prediction starts at the centre tile and a learned router chooses, after each visit, a neighbouring
+tile or a halt, for at most four visits. Because a prediction touches at most four tiles, only those
+tiles need to be in memory for it, and only those tiles are updated by it. The \emph{connected} path
+(the subject of this paper) keeps at most $R$ decoded tiles in RAM and pages the rest, with their
+Adam moments, to and from an SSD. A non-paged \emph{reference} path, which keeps all tiles resident
+and trains them in mini-batches, serves only as a yardstick.
+
+\paragraph{What this paper reports.}
+All results are from one CPU, one seed (7), one small corpus (TinyStories~\citep{eldan2023tinystories},
+byte level), and one model size (2,051,840 coefficients). We report:
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+  \item A 24-hour run with a global inverse-square-root decay of the tile learning rate, which
+  plateaued above the matched-exposure bigram and spent 22\% of its wall time on paging I/O
+  (Section~\ref{sec:global}).
+  \item A paging change (write-behind buffer, visit-frequency eviction, larger resident set) that
+  left the learning curve unchanged while reducing bytes written by about 75$\times$ between
+  two 30-minute pilots, plus two ablations run on it (Section~\ref{sec:paging}).
+  \item A round of 30-minute rate pilots comparing a per-tile rate floor, fixed-threshold warm
+  restarts and adaptive warm restarts (Section~\ref{sec:rate}).
+  \item A long run with adaptive per-tile warm restarts that passed the bigram and is still training
+  (Section~\ref{sec:long}), and the confound that prevents us from attributing its gain
+  (Section~\ref{sec:confound}).
+  \item Mechanisms that are implemented but not yet evaluated: separate per-tile
+  training state, restart options and an experimental continuous plasticity law based on the Lambert
+  $W$ function (Section~\ref{sec:unevaluated}).
+\end{enumerate}
+
+\paragraph{What is and is not new.}
+None of the individual techniques is new: paging and offloading, mixture-of-experts style routing,
+exact per-block gradients, warm restarts~\citep{loshchilov2017sgdr} and Adam~\citep{kingma2015adam}
+are all established. The contribution is their combination into a working bounded-residency,
+per-tile online training loop for a routed language model, and measurements of what that loop costs
+and how it learns. We make no claim that this path is competitive with conventional training: the
+non-paged reference path on the same model reached 2.216~\bpb{} at 2.09M training positions, and a
+byte 5-gram fitted to about 2M bytes reaches 1.55. We also make no claim yet that the model's total
+size can grow while residency stays fixed; every run here has seven tiles, and that test is future
+work (Section~\ref{sec:future}).
+
+\section{Related work}
+
+\paragraph{Out-of-core and offloaded training.}
+ZeRO-Offload and ZeRO-Infinity~\citep{ren2021zerooffload,rajbhandari2021zeroinfinity} train models
+larger than accelerator memory by placing optimizer state and parameters in CPU memory or on NVMe and
+streaming them through each step. They preserve the semantics of dense synchronous training, so every
+parameter is read and written every step. Hexweave instead changes the training semantics so that a
+step touches only a small, routed subset of parameters; the cost is that the result is no longer
+dense backpropagation over the whole model.
+
+\paragraph{Local and decoupled learning.}
+Decoupled neural interfaces~\citep{jaderberg2017dni} train modules from predicted (synthetic)
+gradients so that modules need not wait for a full backward pass; \citet{czarnecki2017understanding}
+analyse when such predictions are adequate. Local error signals~\citep{nokland2019local}, greedy
+layerwise training~\citep{belilovsky2019greedy} and the Forward-Forward
+algorithm~\citep{hinton2022forward} remove or shorten the global backward pass. Earlier connected
+protocols in this project (v1--v5.3, summarised in Section~\ref{sec:history}) trained tiles from a
+learned, label-conditioned correction predictor in the spirit of synthetic gradients. They reached
+accurate credit (prefit cosine up to 0.97) but never beat frozen tiles on held-out loss. The runs
+reported here therefore use \emph{exact} gradients along each training position's own route of at
+most four visits. The update is local in which parameters it touches, not in how its gradient is
+computed.
+
+\paragraph{Modular routing.}
+Mixtures of experts~\citep{jacobs1991adaptive} and sparsely gated
+layers~\citep{shazeer2017outrageously,fedus2021switch} route each input to a few of many experts,
+so compute per example stays small while parameters grow. They are normally trained with dense
+synchronous steps and all experts resident in accelerator memory. Hexweave's tiles play a similar
+role, but routing is sequential (a path of visits, not a parallel top-$k$), route choices are
+trained with a score-function (REINFORCE-style~\citep{williams1992reinforce}) surrogate, and expert
+residency is bounded by paging.
+
+\paragraph{Schedules, restarts and plasticity.}
+Warm restarts (SGDR,~\citep{loshchilov2017sgdr}) periodically reset a decaying learning rate. Our
+per-tile variant triggers a restart from accumulated relative parameter change rather than a fixed
+period, and adapts the trigger from the loss of the finished cycle. The baseline decay is the
+inverse-square-root form used in the Transformer schedule~\citep{vaswani2017attention}. Continual
+learning work studies the opposite failure, forgetting~\citep{kirkpatrick2017ewc}, and growing
+capacity~\citep{rusu2016progressive,yoon2017den}. We do not address forgetting benchmarks here.
+
+\paragraph{Prioritised replay.}
+Prioritised experience replay~\citep{schaul2016per} samples stored transitions in proportion to a
+priority, with importance-sampling correction; the same paper notes that purely greedy
+prioritisation by error focuses on a small subset of hard samples. Our replay ablation used greedy
+prioritisation without sampling or correction and showed that failure (Section~\ref{sec:paging}).
+
+\section{The connected system}
+\label{sec:system}
+
+\subsection{Model}
+\label{sec:model}
+
+The model reads bytes (vocabulary 256) with a 512-byte window. A shared tied embedding
+$E\in\mathbb{R}^{d\times 256}$, $d=128$, embeds each visible byte; each prefix row is the
+RMS-normalised~\citep{zhang2019rmsnorm} sum of the byte's embedding and a sinusoidal position
+vector. Seven tiles sit on a radius-1 axial hex grid ($1+3r(r+1)=7$). One \emph{anchor} is one
+training position: a visible prefix and the byte that follows it. The route for an anchor starts at
+the centre tile with the last prefix row as its state, and after each visit the visited tile's router
+chooses a legal neighbour or halt; revisits are legal and the route stops after four visits.
+
+A tile holds eleven matrices: single-query attention projections Q, K, V, O over the prefix
+(four heads), a gated feed-forward network with gate G, input A and output DOWN at FFN width
+$m=384$, a learned piecewise-linear activation curve with three knots (input clamped to the knot
+range), a router, and a small \emph{pulse} that modulates the FFN output's gain and shift and adds
+route biases. The pulse and router also read a retrieved \emph{history} vector: a weighted mean of
+recent correction records held in a 32-record shared memory. Each visit's output is RMS-normalised.
+The final state is read out through $E^\top$ plus a learned per-byte bias initialised to the
+corpus' smoothed log unigram frequencies. An outer tile has 281,216 coefficients and the centre tile
+282,368; the whole model has 2,051,840.
+
+In the runs reported here, forward computation uses FP32 master weights. Each tile also stores a
+ternary projection of its masters (values in $\{-1,0,+1\}$), which the project's other protocols use
+for the forward pass and which we keep here only for storage and diagnostics (counting trit flips
+and reversals). We make no claim about ternary kernels or ternary quality
+(cf.\ \citep{ma2024era,courbariaux2015binaryconnect}).
+
+All runs use \emph{windowed FFN slicing}: on each visit a deterministic hash of the tile identity and
+coarse signatures of its input, history and prefix tail selects a circular window of 192, 288 or
+336 of the 384 FFN channels; the other channels are zeroed and the DOWN projection is rescaled by
+$1/\sqrt{m_{\text{active}}}$. In the 30-minute pilots that introduced it this beat the full FFN from
+24,576 anchors onward (3.715 against 3.759~\bpb{} at 24,576). That is one pilot pair on one seed.
+
+\subsection{Credit and updates}
+\label{sec:credit}
+
+For each anchor the model predicts the next byte from target-free logits, then observes the target.
+An exact reverse pass along the realised route (\emph{anchor-route credit}) yields each visited
+tile's parameter gradient; repeated visits to one tile are averaged. Each visited tile then takes
+one Adam step on its own gradient at the tile rate $\eta_k(t)$ defined below. The shared embedding
+and readout bias take one Adam step per anchor at a constant rate of 0.003. Router parameters take a
+score-function update with a loss baseline~\citep{williams1992reinforce}; this is a detached surrogate
+on the realised route, not an unbiased policy gradient. Weight decay is decoupled~\citep{loshchilov2019adamw}
+(coefficient 0.001) and scaled by the multiplier the step actually received; after each update any
+master matrix whose RMS exceeds a hard cap (1.5 or 3; Section~\ref{sec:results}) is rescaled to the cap.
+Batch size is one and every byte is scored before it is learned from, so training loss is
+prequential.
+
+The update is local in the sense that matters for paging: an anchor touches at most four of seven
+tiles plus the small shared state. It is not local in the stronger sense of the decoupled-learning
+literature: the gradient is exact backpropagation through the route.
+
+\subsection{The paged tile store}
+\label{sec:store}
+
+Each tile is persisted as one \emph{bundle}: FP32 masters, Adam moments (including route slots), the
+packed ternary projection and per-coefficient trit-direction history. An outer bundle is 3,732,852
+bytes (3.56\,MiB), dominated by training state rather than weights. The store keeps at most $R$
+decoded bundles (cached plus leased) in RAM. A training step leases the bundles its route needs;
+when the cache is full an idle bundle is evicted. In the original store, eviction of a dirty bundle
+wrote it immediately (to a partial file, fsynced, then renamed under its content hash), and the
+oldest idle bundle was evicted first.
+
+The paging round (Section~\ref{sec:paging}) added three controls, none of which changes numerics:
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+  \item \textbf{Write-behind buffer} of $W$ entries: an evicted dirty bundle is encoded into RAM
+  instead of written. A later checkout reclaims it from RAM after a hash check; only when the buffer
+  is full is the least recently evicted entry published to disk. Checkpoints drain the buffer first.
+  \item \textbf{Visit-frequency eviction}: the evicted bundle is the idle one with the least
+  \emph{heat}, an exponentially decayed checkout count with a half-life of about 16 checkouts.
+  \item \textbf{Resident cap} $R$ raised from 4 to 6 (of 7).
+\end{itemize}
+A contract test checks that a bundle decoded from disk, from buffered bytes or kept cached is
+bit-identical, and that losses and every tile's hash, version and step counts agree after a
+checkpoint. Checkpoints (every 4,096 anchors) are complete, hash-manifested copies; the write-behind
+buffer is session RAM and is never a recovery source.
+
+The always-resident arrays (embedding, predictor kept by the protocol, memory records, one
+prefix, with Adam moments) total about 1.5\,MB; the training file is streamed from disk
+(Figure~\ref{fig:system}).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw,rounded corners=2pt,align=center,inner sep=3pt,text width=#1,
+    execute at begin node=\nohyphens},
+  box/.default=4.9cm,
+  arr/.style={-{Stealth[length=2mm]},thick},
+  lbl/.style={font=\footnotesize,fill=white,inner sep=1pt},
+  panel/.style={draw=black!40,rounded corners=4pt,inner sep=5pt}
+]
+% Hex grid, pointy-top axial layout; IDs ordered by q then r. Dashed tile = on disk only (R = 6 example).
+\foreach \q/\r/\id/\res in {-1/0/0/1,-1/1/1/0,0/-1/2/1,0/0/3/1,0/1/4/1,1/-1/5/1,1/0/6/1}{
+  \pgfmathsetmacro{\x}{0.953*(\q+0.5*\r)}
+  \pgfmathsetmacro{\y}{-0.825*\r}
+  \ifnum\res=1
+    \draw[fill=restartcol!18] (\x,\y) ++(30:0.55) -- ++(150:0.55) -- ++(210:0.55) -- ++(270:0.55) -- ++(330:0.55) -- ++(30:0.55) -- cycle;
+  \else
+    \draw[dashed,fill=white] (\x,\y) ++(30:0.55) -- ++(150:0.55) -- ++(210:0.55) -- ++(270:0.55) -- ++(330:0.55) -- ++(30:0.55) -- cycle;
+  \fi
+  \node at (\x,\y) {\id};
+}
+\node[font=\footnotesize,align=center] at (0,-1.85) {7 tiles, radius 1;\\ routes start at tile 3};
+\node[panel,fit={(-1.5,-2.3) (1.5,1.45)},label={[font=\small\bfseries]above:Model}] (model) {};
+
+% RAM column
+\node[box,fill=restartcol!18] (res) at (6.0,1.0) {Resident set: $\le R$ decoded tile/Adam bundles (leased + idle)};
+\node[box,fill=decaycol!15] (wb) at (6.0,-0.45) {Write-behind buffer: $\le W$ encoded dirty bundles};
+\node[box,fill=black!5] (shared) at (6.0,-1.65) {Shared: $E$, readout bias, 32-record memory};
+\node[box,fill=green!8] (tstate) at (6.0,-2.75) {Per-tile training state (outside bundles): restart clock, tile signal, plasticity};
+\node[panel,fit={(res) (wb) (shared) (tstate)},label={[font=\small\bfseries]above:RAM (bounded)}] (ram) {};
+
+% SSD column
+\node[box=3.2cm] (bank) at (12.0,1.0) {Tile bank: one $\approx$3.7\,MB bundle per tile};
+\node[box=3.2cm] (ckpt) at (12.0,-1.65) {Checkpoints (hash-manifested copies)};
+\node[panel,fit={(bank) (ckpt)},label={[font=\small\bfseries]above:SSD}] (disk) {};
+
+\draw[arr] (model.east |- res.west) -- node[lbl,above=1pt,align=center]{lease\\ $\le 4$ tiles} (res.west);
+\draw[arr] ($(res.south)+(-1.0,0)$) -- node[lbl,left=1pt]{evict} ($(wb.north)+(-1.0,0)$);
+\draw[arr] ($(wb.north)+(1.0,0)$) -- node[lbl,right=1pt]{reclaim} ($(res.south)+(1.0,0)$);
+\draw[arr] (bank.west) -- node[lbl,above=1pt]{read on miss} (res.east);
+\draw[arr] (wb.east) -- node[lbl,below=2pt,pos=0.45]{publish oldest} ($(bank.south)+(-0.8,0)$);
+\draw[arr,dashed] (ram.east |- ckpt.west) -- node[lbl,below=1pt]{checkpoint} (ckpt.west);
+\end{tikzpicture}
+\caption{The connected system. Each anchor's route of at most four visits leases tile bundles into a
+bounded resident set; evicted dirty bundles wait in a write-behind buffer, from which they are either
+reclaimed without disk I/O or, oldest first, published to the SSD. Per-tile training state lives
+outside the bundles and sets each tile's rate. The dashed tile illustrates $R=6$ of 7; the 24-hour
+global-decay run used $R=4$ and no buffer.}
+\label{fig:system}
+\end{figure}
+
+\subsection{Tile learning-rate schedules}
+\label{sec:schedules}
+
+All runs use base tile rate $\eta_{\text{loc}}=2\times10^{-3}$ and the shifted inverse-square-root
+factor~\citep{vaswani2017attention}
+\begin{equation}
+  f(s) = \frac{1}{\sqrt{1+s/T}}, \qquad T = 500 \text{ anchors}.
+\end{equation}
+
+\paragraph{Global decay.} Every tile uses $\eta_k(t)=\eta_{\text{loc}}\,f(t)$, where $t$ is the global anchor
+count. By $t=1.3\times10^6$ this factor is about 0.02.
+
+\paragraph{Per-tile floor.} $\eta_k(t)=\eta_{\text{loc}}\max(\varphi, f(t))$ with floor $\varphi=0.25$.
+
+\paragraph{Per-tile warm restarts.} Each tile $k$ keeps an origin $o_k$ and uses
+$\eta_k(t)=\eta_{\text{loc}}\max(\varphi, f(t-o_k))$. Each anchor produces one scalar \emph{change}
+\begin{equation}
+  c_t = \frac{\lVert \Delta E\rVert}{\lVert E\rVert} + \sum_{j\in\text{stepped}(t)} \frac{\lVert\Delta\theta_j\rVert}{\lVert\theta_j\rVert},
+\end{equation}
+the applied Adam step norm of the embedding relative to its norm, plus the same ratio for every tile
+step that anchor. Every tile visited at $t$ adds $c_t$ to its \emph{drift} $D_k$ and the anchor's loss
+to its current cycle's loss sum. When $D_k\ge b_k$, tile $k$ restarts: $o_k\leftarrow t$ (so its next
+step runs at full rate), $D_k\leftarrow 0$, and its records are removed from shared memory so that stale
+corrections are not retrieved. Adam moments are not reset. With fixed restarts the bar $b_k$ stays at the
+threshold $b_0$. With \emph{dynamic} restarts and adaptation $\alpha$, from the second restart on the
+finished cycle's mean anchor loss is compared with the previous cycle's: a lower loss multiplies $b_k$
+by $1-\alpha$ (restart sooner), otherwise by $1+\alpha$, and $b_k$ is clamped to $[b_0/8,\,8b_0]$. We use
+$b_0=2.0$, $\alpha=0.25$, $\varphi=0.25$, so the lower clamp is 0.25.
+
+Two properties of this rule matter for interpreting the results. First, on a small fixture about 90\%
+of $c_t$ came from the embedding's step, so the signal mostly measures how far a tile's \emph{inputs}
+moved, and every visited tile is credited with other tiles' steps. Second, the adaptation compares
+noisy single-cycle means whose anchors differ.
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\paragraph{Data.} TinyStories~\citep{eldan2023tinystories} as plain text, byte level. The preparation
+script terminates each story with byte \texttt{0x03} and holds out every 20th story; a SHA-256
+manifest pins the files (Section~\ref{sec:repro}). Each anchor's target is the next training byte,
+predicted from the previous 512 bytes. The training file is about 21\,MB and no run reported here
+completed one pass.
+
+\paragraph{Evaluation.} Every 8,192 anchors, held-out bits per byte are computed teacher-forced
+with frozen weights and an isolated memory, over eight fixed public held-out spans of 128 bytes:
+1,024 scored bytes per evaluation. Adjacent evaluations of one run move by about $\pm0.1$~\bpb, so
+we report 12-evaluation moving means and windowed means alongside single readings, and compare runs
+at matched anchors, not matched time.
+
+\paragraph{Yardsticks.} Table~\ref{tab:yardsticks} lists reference points on this corpus. The
+$n$-gram models are interpolated Witten--Bell~\citep{witten1991zero} byte models scored on the same
+eight spans as the connected evaluations; the reference path used 64 spans (8,192 bytes), so compare
+it by margin, not by the second decimal. The frozen-tile row is an earlier connected run whose tiles
+received no updates.
+
+\begin{table}[t]
+\centering
+\caption{Held-out yardsticks (\bpb, lower is better). ``Matched'' means fitted to about as many
+training bytes as the connected runs had seen at comparable points.}
+\label{tab:yardsticks}
+\begin{tabular}{lrr}
+\toprule
+Model & Training bytes & Held-out \\
+\midrule
+Byte unigram (context-free) & -- & 4.414 \\
+Connected path, tiles frozen (earlier protocol), best & 589,824 & 3.94 \\
+Byte bigram, matched exposure & 625,059 & 3.31 \\
+Byte trigram & 81,920 & 2.570 \\
+Byte trigram & 625,059 & 2.471 \\
+Byte trigram / 5-gram & 1,990,000 & 2.443 / 1.547 \\
+Reference path (all tiles resident, batch 32) & 392,640 & 2.896 \\
+Reference path (all tiles resident, batch 32) & 2,086,528 & 2.216 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Hardware and process.} One desktop: 12 logical CPUs, 32\,GB RAM, NVMe SSD, Windows~11.
+Every run executes under an owner script that pins the executable, places the trainer in a Job with a
+512\,MiB commit cap, runs it at below-normal priority, and stops it with a checkpoint if host
+available memory stays under 256\,MiB. The machine was shared with other work, and throughput varied
+from 20 to 29 anchors/s for identical work.
+
+\paragraph{Common configuration.} Seed 7; FP32 forward; anchor-route credit; windowed FFN slicing;
+base tile rate $2\times10^{-3}$ with $T=500$; shared rate 0.003; weight decay 0.001; batch one;
+route length at most four. Runs differ in the resident cap $R$, write-behind size $W$, the tile-rate
+schedule and the master RMS cap, as stated with each result.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{A 24-hour run with global decay}
+\label{sec:global}
+
+The first long run used global inverse-square-root decay, $R=4$, no write-behind buffer, oldest-first
+eviction and RMS cap 1.5. In 24 hours it trained 1,856,133 anchors (22.6 anchors/s) with a peak
+working set of 44.6\,MB. Its best single held-out evaluation was 3.271~\bpb{} at 1.74M anchors and its
+last was 3.436. Windowed means (Table~\ref{tab:windows}) fell from 3.618 over the first 200k anchors
+to 3.408 at 400--600k and only to 3.354 at 1.6--1.8M: a plateau that never held below the
+matched-exposure bigram (Figure~\ref{fig:main}).
+
+By the plateau the tile rate had decayed from $2\times10^{-3}$ to about $3.5\times10^{-5}$, while the
+embedding and readout bias kept stepping every anchor at 0.003. All seven tiles' master RMS reached
+the cap of 1.5. Visits per tile ranged from 2.12M (the centre tile, visited on every anchor) to 127k.
+Of the ternary-projection direction changes, 96\% were reversals of the previous change. Our reading,
+which motivated the next two rounds, is that tiles were effectively frozen while their inputs kept
+moving; it is a reading, not a tested explanation.
+
+Paging was expensive. With four resident bundles and eager write-back the run performed 990,786 bundle
+writes, wrote 3.70\,TB and read 4.6\,TB, and spent 18,229\,s, 22\% of the run, in I/O
+(Table~\ref{tab:io}).
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.84\linewidth, height=6.4cm, clip=false,
+  xlabel={Anchors (millions)}, ylabel={Held-out \bpb},
+  xmin=0, xmax=1.9, ymin=2.1, ymax=4.55, ytick={2.5,3,3.5,4,4.5},
+  grid=major, grid style={black!8},
+  legend style={font=\footnotesize, at={(0.99,0.99)}, anchor=north east, fill=white, fill opacity=0.9, text opacity=1},
+  legend cell align=left,
+  tick label style={font=\footnotesize}, label style={font=\small},
+]
+\addplot[only marks, mark=*, mark size=0.6pt, decaycol, opacity=0.35, forget plot]
+  table[x expr=\thisrow{anchors}/1e6, y=heldout_bpb, col sep=comma]{data/global_decay_24h.csv};
+\addplot[only marks, mark=*, mark size=0.6pt, restartcol, opacity=0.35, forget plot]
+  table[x expr=\thisrow{anchors}/1e6, y=heldout_bpb, col sep=comma]{data/adaptive_restarts.csv};
+\addplot[very thick, decaycol]
+  table[x expr=\thisrow{anchors}/1e6, y=mean_bpb, col sep=comma]{data/global_decay_24h_mean.csv};
+\addlegendentry{Global decay, 24 h (12-eval mean)}
+\addplot[very thick, restartcol]
+  table[x expr=\thisrow{anchors}/1e6, y=mean_bpb, col sep=comma]{data/adaptive_restarts_mean.csv};
+\addlegendentry{Dynamic restarts, cap 3 (12-eval mean; ongoing)}
+\addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {4.414};
+\addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {3.31};
+\addplot[thin, black!60, dashed, domain=0:1.9, samples=2, forget plot] {2.57};
+\addplot[thin, black!60, dotted, domain=0:1.9, samples=2, forget plot] {2.216};
+\node[font=\scriptsize, anchor=west, black!70, align=left] at (axis cs:1.92,4.414) {unigram\\ 4.414};
+\node[font=\scriptsize, anchor=west, black!70, align=left] at (axis cs:1.92,3.31) {bigram,\\ matched 3.31};
+\node[font=\scriptsize, anchor=west, black!70, align=left] at (axis cs:1.92,2.57) {trigram\\ $\approx$2.57};
+\node[font=\scriptsize, anchor=west, black!70, align=left] at (axis cs:1.92,2.216) {reference\\ path 2.216};
+\end{axis}
+\end{tikzpicture}
+\caption{Held-out bits per byte for the two long runs. Faint points are single evaluations
+(1,024 bytes each); thick lines are 12-evaluation moving means. Horizontal lines are yardsticks
+from Table~\ref{tab:yardsticks}; the reference path is a different (non-paged, batched) training
+path, shown only for scale. The dynamic-restart run is still in progress; its points extend to the
+latest exported evaluation (1,531,904 anchors).}
+\label{fig:main}
+\end{figure}
+
+\subsection{Paging round: write-behind and visit-frequency eviction}
+\label{sec:paging}
+
+The paging round ran 30-minute pilots with $R=6$, a three-entry write-behind buffer and
+visit-frequency eviction, otherwise matching the start of the 24-hour run. The paged control
+reproduced the held-out curve of the old-paging pilot to three decimals at every shared evaluation
+(Table~\ref{tab:paging}), as the bit-identity contract requires, while bytes written fell from 28.9\,GB
+to 0.38\,GB (about 75$\times$) and I/O time from 158\,s to 3.3\,s. Of 567 evictions, 492 were deferred
+into the buffer and 480 of those were reclaimed from RAM without touching disk. The change bundles
+three controls (larger $R$, buffer, eviction policy); we did not measure their separate contributions.
+
+Two ablations ran on the new store. \emph{History off} replaces every visit's retrieved-memory input
+with zeros. It made no measurable difference to held-out loss at matched anchors, but 93\% of visits
+concentrated on two tiles. \emph{Greedy prioritised replay} (buffer of 1,024 past positions, two
+replays per anchor, priority = most recent loss) was worse at matched anchors and ran at about half
+the throughput. Replayed positions averaged 6.4 nats of loss (9.2 bits, worse than a uniform guess
+over 256 bytes), consistent with the known failure of greedy
+prioritisation~\citep{schaul2016per}: the buffer fixates on positions whose loss does not fall (rare
+bytes, story boundaries). Replay did even out tile exposure. A replay arm with history off was also
+worse.
+
+\begin{table}[t]
+\centering
+\caption{Paging round, 30-minute pilots, held-out \bpb{} at matched anchors. All new-store arms use
+$R=6$, $W=3$ and visit-frequency eviction. Dashes: the pilot ended before that evaluation.}
+\label{tab:paging}
+\begin{tabular}{lrrrr}
+\toprule
+Arm & 8,192 & 16,384 & 24,576 & 32,768 \\
+\midrule
+Old store ($R=4$, eager write, oldest-first) & 4.163 & 3.864 & 3.715 & 3.755 \\
+New store, control & 4.163 & 3.864 & 3.715 & 3.755 \\
+New store, history off & 3.979 & 3.822 & 3.794 & 3.777 \\
+New store, greedy prioritised replay & 4.174 & 3.907 & -- & -- \\
+New store, replay with history off & 4.236 & 3.941 & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Paging I/O. The 24-hour row and the pilot rows are separate runs; the long-run row differs
+from the 24-hour run in resident cap, buffer, eviction policy and rate schedule, so its ratio to the
+24-hour run is not attributable to paging alone. Bytes per anchor are derived by division.}
+\label{tab:io}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Run & Anchors & Written & I/O time & Per anchor \\
+\midrule
+24-hour global decay ($R=4$, eager) & 1,856,133 & 3.70\,TB & 18,229\,s (22\%) & $\approx$2.0\,MB \\
+Pilot, old store ($R=4$, eager) & 30 min & 28.9\,GB & 158\,s & -- \\
+Pilot, new store ($R=6$, $W=3$) & 30 min & 0.38\,GB & 3.3\,s & -- \\
+Long run, new store, first 1.3M & 1,300,740 & 8.5\,GB & -- & $\approx$6.5\,kB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Rate round: floor, fixed restarts, dynamic restarts}
+\label{sec:rate}
+
+With paging cheap, a second round of 30-minute pilots on the new store changed only the tile-rate
+schedule (Table~\ref{tab:rate}, Figure~\ref{fig:pilots}). A per-tile floor of 0.25 alone gave mixed
+results within evaluation noise. Fixed-threshold restarts ($b_0=2.0$) were better early (3.978 against
+4.163 at 8,192 anchors) but not consistently later. Dynamic restarts gave the lowest reading at all
+five matched evaluations, by margins over the control (0.07--0.22~\bpb) that are only partly outside
+the spread between adjacent evaluations. Dynamic restarts with the RMS cap raised from 1.5 to 3 were identical to dynamic restarts
+through 40,960 anchors, so in the pilot the cap never bound.
+
+Restart counts were very uneven. Under dynamic restarts the seven tiles restarted 103, 5, 105, 178, 6,
+1 and 2 times (tile IDs 0--6; tile 3 is the centre). The three busiest tiles' bars fell from 2.0 to
+0.27--0.50, near the lower clamp of 0.25, and their rate factors ended near 0.8.
+
+\begin{table}[t]
+\centering
+\caption{Rate round, 30-minute pilots on the new store, held-out \bpb{} at matched anchors, and the
+last evaluation of each pilot (at differing anchor counts, so not comparable across rows).}
+\label{tab:rate}
+\begin{tabular}{lrrrrrr}
+\toprule
+Arm & 8,192 & 16,384 & 24,576 & 32,768 & 40,960 & Last (anchors) \\
+\midrule
+Control (global decay) & 4.163 & 3.864 & 3.715 & 3.755 & 3.679$^\dagger$ & 3.661 (37,074) \\
+Floor 0.25 only & 4.152 & 3.816 & 3.750 & 3.722 & -- & 3.616 (35,127) \\
+Fixed restarts, $b_0=2.0$ & 3.978 & 3.730 & 3.624 & 3.734 & 3.741 & 3.558 (50,283) \\
+Dynamic restarts ($\pm$25\%) & 3.941 & 3.709 & 3.595 & 3.673 & 3.607 & 3.460 (46,000) \\
+Dynamic restarts, RMS cap 3 & 3.941 & 3.709 & 3.595 & 3.673 & 3.607 & 3.480 (45,886) \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^\dagger$From the old-store pilot, whose curve the control reproduces at every shared evaluation.}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.62\linewidth, height=4.9cm,
+  xlabel={Anchors (thousands)}, ylabel={Held-out \bpb},
+  xmin=6, xmax=52, ymin=3.4, ymax=4.3,
+  grid=major, grid style={black!8},
+  legend style={font=\scriptsize, at={(1.02,1)}, anchor=north west},
+  legend cell align=left,
+  tick label style={font=\footnotesize}, label style={font=\small},
+]
+\addplot[thick, black!60, mark=o, mark size=1.4pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_control.csv};
+\addlegendentry{Control}
+\addplot[thick, green!50!black, mark=triangle*, mark size=1.6pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_floor.csv};
+\addlegendentry{Floor 0.25}
+\addplot[thick, decaycol, mark=square*, mark size=1.2pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_restart.csv};
+\addlegendentry{Fixed restarts}
+\addplot[thick, restartcol, mark=*, mark size=1.3pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_adapt.csv};
+\addlegendentry{Dynamic restarts}
+\addplot[thick, purple, dashed, mark=x, mark size=1.8pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_nohist.csv};
+\addlegendentry{History off}
+\addplot[thick, black!40, dotted, mark=diamond*, mark size=1.6pt] table[x expr=\thisrow{anchors}/1e3, y=heldout_bpb, col sep=comma]{data/pilot_replay.csv};
+\addlegendentry{Greedy replay}
+\end{axis}
+\end{tikzpicture}
+\caption{Thirty-minute pilots. Each point is one 1,024-byte evaluation; the last point of each pilot
+falls where its 30 minutes ended. Differences below about 0.1~\bpb{} are within the spread between
+adjacent evaluations of a single run.}
+\label{fig:pilots}
+\end{figure}
+
+\subsection{A long run with dynamic restarts}
+\label{sec:long}
+
+The dynamic-restart recipe with RMS cap 3 then ran as a long run on the same model with $R=6$ and $W=3$.
+Its windowed held-out means (Table~\ref{tab:windows}, Figure~\ref{fig:main}) fell from 3.431 over
+the first 200k anchors to 2.885 at 400--600k and 2.773 at 600--800k, held near 2.78 to 1.0M, then fell
+to 2.650 at 1.0--1.2M and 2.621 at 1.2--1.4M. The best single evaluation through 1.3M anchors was 2.551 at 1,269,760
+anchors. From 200k anchors onward every window lies below the matched-exposure bigram (3.31); the
+windows from 400k onward lie between the bigram and the trigram fitted to a similar number of bytes
+(Table~\ref{tab:yardsticks}). Throughput was about 21 anchors/s, the peak working set about
+50\,MB, and 8.5\,GB were written over the first 1.3M anchors.
+
+At 1.3M anchors, restarts per tile ranged from 437 to 4,955, every bar sat at or near its lower clamp,
+and rate factors were 0.56--0.95. Per-tile master RMS was 1.33--2.46, so the earlier cap of 1.5 would
+have bound in this run even though it never bound in the pilot. As a derived comparison, the most
+restarted tile restarted on average about once every 260 anchors, whereas the global decay factor at
+1.3M anchors is about 0.02; busy tiles therefore trained at roughly 30--50 times the rate they would
+have had under global decay.
+
+The run was interrupted at 1,300,740 anchors when other programs pushed host available memory below the
+owner's floor; the trainer's own peak was 54\,MB. It was resumed from its verified checkpoint. It is still running as this is written, so its endpoint is not reported. The series in \code{paper/data/} and Table~\ref{tab:windows} run to 1{,}531{,}904 anchors; over that span the windowed mean kept falling, and the best single evaluation was 2.546 at 1{,}482{,}752 anchors. Totals for bytes written, I/O time and per-tile restart statistics are given at 1.3M anchors, the last point at which a complete report was written.
+
+\begin{table}[t]
+\centering
+\caption{Windowed means of held-out \bpb: the mean of all evaluations whose anchor count $a$
+satisfies $\text{lo}\le a<\text{hi}$, computed from the exported series in \code{paper/data/}. The
+dynamic-restart run is in progress; its last window is partial.}
+\label{tab:windows}
+\begin{tabular}{lrr}
+\toprule
+Anchors & Global decay, 24 h & Dynamic restarts, cap 3 \\
+\midrule
+0--200k & 3.618 & 3.431 \\
+200--400k & 3.482 & 3.061 \\
+400--600k & 3.408 & 2.885 \\
+600--800k & 3.409 & 2.773 \\
+800k--1.0M & 3.393 & 2.778 \\
+1.0--1.2M & 3.375 & 2.650 \\
+1.2--1.4M & 3.372 & 2.621 \\
+1.4--1.6M & 3.374 & 2.627 (to 1.53M) \\
+1.6--1.8M & 3.354 & -- \\
+1.8M--end & 3.404 & -- \\
+\midrule
+Best single evaluation & 3.271 (1.74M) & 2.546 (1.48M) \\
+Last evaluation & 3.436 (1.86M) & 2.609 (1.53M, in progress) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Samples.}
+Generation opens with public held-out text that ends at a story boundary and fills the 512-byte window,
+followed by the prompt (shown in bold), because training always places the newest byte at the last
+window position. From the 1,300,740-anchor checkpoint, 200 bytes each:
+
+\begin{quote}\small
+\emph{Greedy:} \textbf{Once upon a time}, there was a little girl named Spot with her fish and she was a
+big was a little box. She was said to play with her fish and said, \textquotedbl Yes, she said
+\textquotedbl Yes, I wanted to betth and said a lot her and she wa
+
+\emph{Nucleus, $p=0.9$, $T=0.8$:} \textbf{Once upon a time}, there was a little betto named Tim whas a
+smem wish. One day, Tim was very fin. She desten the to box named Amy always where st whow and do. Once
+uponed to rang in the played to real with her fing.
+
+\emph{Nucleus, $p=0.9$, $T=0.8$:} \textbf{Tom and his dog went to the} wanted to the pailed named
+Specired. Amy was folled with help. One day, One day, Amy had a little beall named Spot. The became was
+to the dog. He was saw the pand to the the put to help. She was a st
+\end{quote}
+For contrast, the 24-hour global-decay run's sample:
+\begin{quote}\small
+\textbf{The sun was} \textquotedbl{} The here birt the The day haide the ware wat big boor bean it wat
+was was the was foout.
+\end{quote}
+The restart run produces TinyStories-like words, names and dialogue structure with frequent misspelling
+and little coherence; the global-decay run produces mostly function words and fragments. Each
+completion took about 3.9\,s on the CPU including checkpoint load. These samples are illustrations; we
+did not score them.
+
+\subsection{An unresolved confound}
+\label{sec:confound}
+
+Under dynamic restarts the bars sat at their lower clamp, so the busiest tiles restarted every few
+hundred anchors and trained at 56--95\% of the base rate throughout. The intended mechanism, ``restart a
+tile when its inputs have drifted, and forget its stale memory records'', and a much simpler explanation,
+``the global decay (to about 2\% of base by 1.3M anchors) was too fast'', predict the same improvement.
+The pilots do not separate them: the floor-only arm, which keeps at least 25\% of the base rate, was
+within noise of the control over 35k anchors, but 30 minutes is too short for the global factor to fall
+far below the floor (at 35k anchors $f\approx 0.12$), so it does not test the long-run regime where the
+difference arises. The planned test is a constant-rate control (no decay, no restarts) and ablations of
+the restart options in Section~\ref{sec:unevaluated}, run long enough to reach that regime.
+
+\section{Implemented but not yet evaluated}
+\label{sec:unevaluated}
+
+The following mechanisms are implemented in the repository and have passed independent code review,
+but no training run has used them. We describe them so the planned ablations are well
+defined; we report no results for them.
+
+\paragraph{Per-tile training state.} Each tile has a small record kept apart from its weights: never
+inside the paged bundle, so it can be read and updated without a checkout, and never read by
+inference. It holds the restart clock (origin, drift, bar, restart count, cycle loss), a plasticity
+dial multiplied into the tile rate, and a \emph{tile signal}: exponential moving averages (weight
+$\max(1/n, 1/256)$ for the $n$-th sample) of the tile's input concatenated with its retrieved history
+input, of its mean local gradient norm, and of the anchor loss on visited anchors. After 256 visits
+(one EMA horizon) a reference snapshot of the input EMA is taken, and the tile's \emph{distance} is
+$\lVert \text{ema}-\text{ref}\rVert/\lVert\text{ref}\rVert$. Unlike the shared change signal of
+Section~\ref{sec:schedules}, it is specific to one tile's own inputs.
+
+\paragraph{Restart options.} \code{forget} (default on) controls whether a restart removes the tile's
+memory records. \code{signal} set to \code{tile} uses the tile distance as drift, re-snapshotting the reference at
+each restart. \code{stagger} enforces a minimum number of anchors between any two restarts, restarting
+the tile that has waited longest. \code{clamp} sets the adaptive bar range (default 8).
+\code{replay} re-runs the restarted tile's last few live positions after a restart and gives that tile
+one step per replay at its fresh rate. It is capped at 6 because each tile commit ages the tile's
+memory records and gain, which expire beyond a revision lag of 8, and a visited tile already takes
+two commits per anchor.
+
+\paragraph{Lambert plasticity (experimental).} A continuous alternative to discrete restarts sets each
+tile's dial from its distance $d$ and bar $b$ as
+\begin{equation}
+  p = W_0\!\left(\frac{e\,d}{b}\right), \qquad \eta_k = \eta_{\text{loc}}\max(\varphi, p), \qquad
+  \text{ref} \leftarrow \text{ref} + \min\!\left(1, \tfrac{p}{64}\right)(\text{ema}-\text{ref}),
+\end{equation}
+where $W_0$ is the principal branch of the Lambert $W$ function~\citep{corless1996lambert}. Since
+$W_0(e)=1$, $d=b$ gives the full base rate; $d=0$ gives zero (held at the floor); larger $d$ grows
+roughly logarithmically, capped at 4. The reference chases the EMA at a rate that grows with $p$, so
+drift raises plasticity, which in turn pulls the reference towards the input average and lowers drift.
+On a small repetitive fixture this loop settled well below the bar (dials of about 0.04--0.44 depending
+on the bar). It is a hypothesis with no language-modelling measurements.
+
+\section{Earlier connected protocols}
+\label{sec:history}
+
+For context, and so that the negative results are on record: the connected path went through five
+earlier protocols trained from \emph{predicted} credit. Eight unscored ``lanes'' per anchor ran extra
+routes and updated tiles from a learned correction predictor, scaled by a Lambert-$W$ gain on the
+predictor's measured quality. Each version fixed one measured failure: predictions uncorrelated with real
+credit (v1); residual-stream growth that starved the real correction (v2); an alignment of the
+embedding toward rank one (v3); and a predictor that, without the target byte, could only learn the
+conditional expectation of the correction, which vanishes as the readout fits (v4). Conditioning the
+predictor on the observed target byte's embedding (v5, the conditional form of synthetic
+gradients~\citep{jaderberg2017dni}) reached prefit cosine up to 0.97, but all five v5 pilots fell
+behind the frozen-tile run after 5,000--7,000 anchors. The best of these protocols stayed between the
+unigram and bigram levels. Removing the lanes and using exact anchor-route credit (Section~\ref{sec:credit})
+is what first broke that plateau, in a 30-minute pilot (3.573~\bpb{} at 48,398 anchors). Even predicted
+credit applied only along the anchor's own route reached 3.835 in the same time, which suggests the lanes,
+not the predictor's accuracy, caused the earlier plateau; that is one pilot.
+
+\section{Discussion and limitations}
+\label{sec:limits}
+
+\paragraph{What the evidence supports.} A routed byte-level model can be trained online, one position at
+a time, with only a bounded subset of its tiles decoded in RAM (peak working sets of 44.6--54\,MB for a
+model whose tile bundles total about 26\,MB on disk, and whose 24-hour run read and wrote terabytes).
+Paging cost depends heavily on the store policy: write-behind buffering and visit-frequency eviction
+removed most writes without changing numerics. Under per-tile warm restarts the paged model passed the
+matched-exposure bigram and, in windowed means, approached the reference path's 2.896 at a similar
+exposure (2.885 at 400--600k anchors against 2.896 at 392,640), although those two numbers come from
+different evaluation sets and should be compared only by margin.
+
+\paragraph{What it does not support.}
+\begin{itemize}[leftmargin=*,itemsep=0pt,topsep=2pt]
+\item \textbf{Scale independence.} Every run had seven tiles and at least four resident. With $R=6$ of
+7, most of the model is resident most of the time. Whether quality holds when most tiles are on disk
+is untested.
+\item \textbf{Attribution of the restart gain.} See Section~\ref{sec:confound}.
+\item \textbf{Statistical strength.} One seed; one corpus; one model size; held-out scores from
+1,024 bytes that move about $\pm0.1$ between adjacent evaluations; most comparisons are 30-minute
+pilots with a single run per arm.
+\item \textbf{Throughput.} About 21--23 anchors/s on a shared desktop that varied 20--29 anchors/s for
+identical work. The reference path ran 52--92 anchors/s with batching. The connected path is slower
+per byte and has not been optimised for speed; we make no throughput claim beyond these measurements.
+\item \textbf{Quality.} The best connected readings remain above a byte trigram fitted to a similar
+number of bytes and far above a 5-gram. Samples are fluent-looking fragments, not coherent stories.
+\item \textbf{Routing balance.} Tile exposure is skewed (2.12M to 127k visits in the 24-hour run;
+93\% of visits on two tiles without history input). This limits how much of the model each anchor
+can use and will matter more with more tiles.
+\end{itemize}
+
+\section{Future work (not implemented)}
+\label{sec:future}
+
+The next steps are planned in this order, each with a pre-set gate whose failure is itself a result.
+Before any of them: a constant-rate control and the restart-option ablations of
+Section~\ref{sec:unevaluated}, and a second seed of the best recipe.
+\begin{enumerate}[leftmargin=*,itemsep=0pt,topsep=2pt]
+\item \textbf{Fixed larger tile count.} A radius-2 grid of 19 tiles (about 5.6M coefficients) at the
+current tile size, compared with all 19 resident and with 6 resident, at matched anchors and with
+4,096-byte evaluations. This is the direct test of the paper's goal: quality when most of the model
+is on disk.
+\item \textbf{Growth by cloning.} Split an overloaded tile into two function-preserving copies, after
+Net2Net~\citep{chen2016net2net}, with weights and optimiser state copied, fresh per-tile training state
+and an even router split. Splits would be triggered by a relative threshold on a per-tile signal
+(measured against the other tiles, rising as reserved capacity runs out) and would use pre-allocated
+padded slots so that no split waits on allocation.
+\item \textbf{Batched GPU waves.} With many tiles, a wave of anchors lands mostly on different tiles
+and could run as one batched operation on a GPU. An earlier GPU prototype at seven tiles ran
+\emph{slower} than the CPU (17.4 against 27.9 anchors/s), so this is a hypothesis for larger tile
+counts only.
+\end{enumerate}
+
+\section{Reproducibility}
+\label{sec:repro}
+
+The source, configurations and run reports are in the Hexweave repository; every number in this paper
+comes from the run reports there (the plotted series are exported in \code{paper/data/}). Training
+runs \code{hexweave train -{}-config <run.json>} under the owner script; samples are produced
+read-only from a named checkpoint (nucleus sampling~\citep{holtzman2019curious} with the last two flags):
+\begin{small}
+\begin{verbatim}
+cargo build --release --locked
+python -B -m scripts.core_owner --config <run.json> [--resume-on-memory]
+hexweave complete --config <run.json> --checkpoint <name> --prompt <text> \
+    --max-new-bytes 200 [--top-p 0.9 --temperature 0.8 --seed <n>]
+\end{verbatim}
+\end{small}
+Run names (configurations are \code{work/core-runs/<name>.json}):
+\begin{footnotesize}
+\begin{verbatim}
+global decay, 24 h: connected-fp32-v54-anchor-exact-window-full-s7-20261111
+dynamic restarts:   connected-fp32-v56-adapt-cap3-full-s7-20261113
+corpus manifest:    2710d21277ed6e1817477ae6a61444ace674b7dc371a1ec3ea304a9e93575af8
+\end{verbatim}
+\end{footnotesize}
+Both use window 512, seed 7, eight evaluation spans, evaluation every 8,192 anchors and checkpoints
+every 4,096. Hardware: 12 logical CPUs, 32\,GB RAM, NVMe SSD, Windows~11; training child at
+below-normal priority.
+
+\section*{Acknowledgements and use of AI tools}
+Implementation, experiment execution, review and drafting of this paper were carried out with AI coding
+assistants (Anthropic's Claude via Claude Code, and Google's Antigravity CLI for an earlier GPU
+prototype) under the author's direction. Every reported number comes from the run reports in the
+repository; the author is responsible for the content.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

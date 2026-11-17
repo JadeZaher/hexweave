@@ -6,8 +6,8 @@ use anyhow::{ensure, Result};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
-/// Latent weights and interleaved Adam moments for one ternary matrix.
-#[derive(Clone, Debug, PartialEq)]
+/// Persistent f32 shadow weights plus two Adam moments per coefficient (12 bytes total).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Latent {
     pub weights: Vec<f32>,
     pub moments: Vec<f32>,
@@ -16,6 +16,7 @@ pub(super) struct Latent {
 
 thread_local! {
     static CALLS: Cell<u64> = const { Cell::new(0) };
+    // Resident training retains every initialized entry; packed trits do not replace it.
     static LATENTS: RefCell<BTreeMap<(usize, usize), Latent>> = const { RefCell::new(BTreeMap::new()) };
 }
 
@@ -82,6 +83,7 @@ pub(super) fn steps() -> Vec<((usize, usize), u64)> {
 }
 
 /// Copy of the latent state and draw counter, for checkpoints.
+#[cfg(test)]
 pub(super) fn export() -> (Latents, u64) {
     let latents = LATENTS.with(|cell| {
         cell.borrow()
@@ -92,10 +94,52 @@ pub(super) fn export() -> (Latents, u64) {
     (latents, CALLS.with(Cell::get))
 }
 
+/// Borrow the latent map and draw counter without cloning optimizer state.
+pub(super) fn with_latents<T>(
+    f: impl FnOnce(&BTreeMap<(usize, usize), Latent>, u64) -> Result<T>,
+) -> Result<T> {
+    LATENTS.with(|cell| f(&cell.borrow(), CALLS.with(Cell::get)))
+}
+
 /// Replace the latent state and draw counter from a checkpoint.
 pub(super) fn import(latents: Latents, calls: u64) {
     LATENTS.with(|cell| *cell.borrow_mut() = latents.into_iter().collect());
     CALLS.with(|cell| cell.set(calls));
+}
+
+/// Remove one tile's latent entries without changing the shared state or draw counter.
+pub(super) fn take_tile(owner: usize) -> Latents {
+    LATENTS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let keys: Vec<_> = map
+            .range((owner, 0)..=(owner, usize::MAX))
+            .map(|(&key, _)| key)
+            .collect();
+        keys.into_iter()
+            .map(|key| (key, map.remove(&key).unwrap()))
+            .collect()
+    })
+}
+
+/// Attach a tile's latent entries only when all keys are unique and absent.
+pub(super) fn put_tile(owner: usize, values: Latents) -> Result<()> {
+    ensure!(owner < super::geometry::TILES, "invalid tile latent owner");
+    LATENTS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        ensure!(
+            map.range((owner, 0)..=(owner, usize::MAX)).next().is_none(),
+            "tile optimizer state is already resident"
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, _) in &values {
+            ensure!(
+                key.0 == owner && seen.insert(*key) && !map.contains_key(key),
+                "duplicate or foreign tile latent"
+            );
+        }
+        map.extend(values);
+        Ok(())
+    })
 }
 
 /// One tuned update of `matrix` keyed by (owner, matrix index); returns trit transitions.
@@ -114,6 +158,7 @@ pub(super) fn update(
         }
         Update::Raw => matrix.apply_stochastic(gradient, rate, stream()),
         Update::Latent => {
+            // Move this entry out for mutation; other tiles' optimizer state stays resident.
             let existing = LATENTS.with(|cell| cell.borrow_mut().remove(&key));
             let mut latent = match existing {
                 Some(latent) => latent,
@@ -125,6 +170,7 @@ pub(super) fn update(
                     step: 0,
                 },
             };
+            // Adam advances even when no shadow weight crosses a ternary threshold.
             latent.step += 1;
             let changed = matrix.apply_latent(
                 &mut latent.weights,

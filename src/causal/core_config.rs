@@ -65,6 +65,10 @@ pub(super) struct Config {
     pub decay: super::core_schedule::Decay,
     #[serde(default)]
     pub explore: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected: Option<super::connected_config::Options>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_eval: Option<super::connected_eval_config::Options>,
 }
 
 fn default_batch() -> u32 {
@@ -90,6 +94,20 @@ fn is_default_eval_spans(value: &usize) -> bool {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         super::core_schedule::validate(self)?;
+        if let Some(options) = self.connected {
+            options.validate_run(self)?;
+            ensure!(
+                self.eval_spans <= 128 && self.eval_cases <= 4,
+                "connected evaluation supports at most 128 spans and four samples"
+            );
+        }
+        if let Some(options) = &self.connected_eval {
+            ensure!(
+                self.connected.is_some(),
+                "connected_eval requires connected training"
+            );
+            options.validate()?;
+        }
         ensure!(self.schema == 1, "core config schema must be 1");
         let parts: Vec<Component<'_>> = self.out.components().collect();
         ensure!(
@@ -132,15 +150,30 @@ impl Config {
             explore: self.explore,
             history_ticks: 8,
             fit_predictor: false,
+            connected: self.connected.is_some(),
+            connected_fp32: self
+                .connected
+                .is_some_and(|o| o.precision == super::connected_precision::Precision::Fp32),
+            slice_mode: self
+                .connected
+                .map_or(super::connected_config::SliceMode::Full, |o| o.slice_mode),
             ..Knobs::core(self.rate, self.seed)
         }
     }
 
     /// Numerics identity: resuming requires the same protocol, geometry, data, seed, rate and knobs.
     pub fn identity(&self) -> Result<String> {
-        let value = json!({ "protocol": PROTOCOL, "geometry": Geometry::candidate(),
+        let protocol = if let Some(options) = self.connected {
+            options.precision.protocol()
+        } else {
+            PROTOCOL
+        };
+        let mut value = json!({ "protocol": protocol, "geometry": Geometry::candidate(),
                             "data": &self.data, "seed": self.seed, "rate": self.rate,
                             "numerics": self.knobs() });
+        if let Some(options) = self.connected {
+            value["connected"] = serde_json::to_value(options)?;
+        }
         Ok(digest(&serde_json::to_vec(&value)?))
     }
 }

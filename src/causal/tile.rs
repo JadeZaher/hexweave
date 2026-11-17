@@ -1,29 +1,33 @@
+//! One routed attention/FFN/modulation block and its two-phase adjoint; see STUDY.md.
+
 use super::geometry::{Geometry, EVIDENCE_RULE, MATRIX_COUNT};
 use super::tile_gradients::TileGradients;
 use super::{attention, ffn, norm, pulse, routing};
 use crate::ternary::{Evidence, TernaryMatrix};
 use anyhow::{ensure, Context, Result};
+use cache::Cache;
+
+#[path = "tile_cache.rs"]
+mod cache;
 
 pub(super) struct Tile {
     pub geometry: Geometry,
     pub id: usize,
     pub version: u64,
+    pub weights: Option<super::connected_precision::Weights>,
     pub matrices: [TernaryMatrix; MATRIX_COUNT],
 }
 
 pub(super) struct Forward {
+    /// Next state; RMS 1 under `connected` (post-visit normalization), raw otherwise.
     pub output: Vec<f32>,
+    /// RMS of the raw output before post-visit normalization (`1/inverse` under `connected`).
+    pub raw_rms: f32,
     #[allow(dead_code)]
     pub latent: Vec<f32>,
     pub heads: Vec<f32>,
-}
-
-struct Cache {
-    attention: attention::Cache,
-    normalized: norm::Rms,
-    ffn: ffn::Cache,
-    pulse: pulse::Cache,
-    output: Vec<f32>,
+    /// Fraction of FFN preactivations beyond the outer knots (|z| > 2) on this forward.
+    pub knot_overflow: f32,
 }
 
 impl Tile {
@@ -43,6 +47,7 @@ impl Tile {
         }
         Ok(Self {
             geometry,
+            weights: None,
             id,
             version: 0,
             matrices: matrices
@@ -69,6 +74,7 @@ impl Tile {
         }
         Ok(Self {
             geometry,
+            weights: None,
             id,
             version,
             matrices: matrices
@@ -81,10 +87,13 @@ impl Tile {
         std::array::from_fn(|index| self.matrices[index].packed_bytes())
     }
 
+    /// Return the next state and routing features, discarding the internal activation cache.
     pub fn forward(&self, input: &[f32], memory: &[f32], history: &[f32]) -> Result<Forward> {
         let cache = self.cache(input, memory, history)?;
         Ok(Forward {
-            output: cache.output,
+            knot_overflow: cache.ffn.knot_overflow(),
+            raw_rms: cache.raw_rms(),
+            output: cache.output_norm.map_or(cache.output, |rms| rms.values),
             latent: cache.pulse.latent,
             heads: cache.pulse.heads,
         })
@@ -130,13 +139,17 @@ impl Tile {
             policy.is_none() || gradients.is_some(),
             "policy needs a parameter sink"
         );
+        // Both correction gathering and parameter fitting rebuild this full forward cache.
         let cache = self.cache(input, memory, history)?;
+        // Below, `upstream` is the raw-output adjoint: post-visit normalization comes first.
+        let raw = cache.raw_adjoint(upstream)?;
+        let upstream: &[f32] = &raw;
         let ffn_adjoint: Vec<_> = upstream
             .iter()
             .enumerate()
             .map(|(j, b)| 0.25 * cache.pulse.gain(j) * b)
             .collect();
-        let mut normalized_adjoint = ffn::backward(
+        let (mut normalized_adjoint, curve_adjoint) = ffn::backward(
             self,
             &cache.normalized.values,
             &cache.ffn,
@@ -148,6 +161,7 @@ impl Tile {
             &cache.pulse,
             &cache.ffn.output,
             upstream,
+            &curve_adjoint,
             gradients.as_deref_mut(),
         )?;
         norm::add(&mut normalized_adjoint, &pulse_adjoint)?;
@@ -165,10 +179,11 @@ impl Tile {
             prefix_adjoint,
             gradients.as_deref_mut(),
         )?;
+        // Route credit is detached: it changes parameters, not the returned input correction.
         if let (Some((selected, advantage)), Some(gradient)) = (policy, gradients.as_deref_mut()) {
             routing::policy(
                 self,
-                &cache.output,
+                cache.visible(),
                 &cache.pulse.heads,
                 &cache.pulse.latent,
                 history,
@@ -201,12 +216,14 @@ impl Tile {
                 None => matrix.apply_gradient(&mut Evidence::new(matrix.len())?, gradient, 1)?,
             };
         }
+        // Versions track packed-trit changes; latent Adam can advance without a version bump.
         if transitions.iter().any(|&count| count > 0) {
             self.version = next;
         }
         Ok(transitions)
     }
 
+    /// Attention, gated FFN, gain/shift, then post-visit RMS normalization (connected only).
     fn cache(&self, input: &[f32], memory: &[f32], history: &[f32]) -> Result<Cache> {
         let d = self.geometry.width;
         norm::vector(input, d)?;
@@ -223,27 +240,40 @@ impl Tile {
             "history exceeds unit correction bound"
         );
         let attention = attention::forward(self, input, memory)?;
-        let mix = super::tuning::current().attention_mix;
+        let knobs = super::tuning::current();
         let u: Vec<_> = input
             .iter()
             .zip(&attention.output)
-            .map(|(x, o)| x + mix * o)
+            .map(|(x, o)| x + knobs.attention_mix * o)
             .collect();
         let normalized = norm::rms(&u)?;
-        let ffn = ffn::forward(self, &normalized.values)?;
         let pulse = pulse::forward(self, &normalized.values, history)?;
+        let ffn = ffn::forward_visit(
+            self,
+            &normalized.values,
+            pulse.curve_controls(),
+            input,
+            memory,
+            history,
+        )?;
         let output: Vec<_> = u
             .iter()
             .enumerate()
             .map(|(j, u)| u + 0.25 * (pulse.gain(j) * ffn.output[j] + pulse.shift(j, d)))
             .collect();
         norm::finite(&output)?;
+        let output_norm = if knobs.connected {
+            Some(norm::rms(&output)?)
+        } else {
+            None
+        };
         Ok(Cache {
             attention,
             normalized,
             ffn,
             pulse,
             output,
+            output_norm,
         })
     }
 }

@@ -60,3 +60,72 @@ fn saved_v1_evaluation_reproduces_logged_bits() -> Result<()> {
     }
     Ok(())
 }
+
+/// Compare greedy generation with and without replay on the saved public v2 state.
+#[test]
+#[ignore = "requires the completed public v2 scan checkpoint under work/"]
+fn saved_v2_greedy_history_diagnostic() -> Result<()> {
+    use super::core_config::Config;
+    use super::geometry::Geometry;
+
+    let run = Path::new("work/core-runs/tiny-v2-b32-s7-scan-r003-20261102");
+    let config: Config = serde_json::from_slice(&std::fs::read(run.with_extension("json"))?)?;
+    config.validate()?;
+    let knobs = config.knobs();
+    let _guard = tuning::scoped(knobs);
+    let preserved =
+        Path::new("work/core-runs/scan-final-preserved").join("tiny-v2-b32-s7-scan-r003-20261102");
+    let checkpoint = preserved.join("a000000392640");
+    let (mut state, mut store) =
+        super::core_checkpoint::load(&checkpoint, Geometry::candidate(), &config.identity()?)?;
+    let retained = state.history.clone();
+    let report: Value = serde_json::from_slice(&std::fs::read(preserved.join("report.json"))?)?;
+    let prompts = [
+        "Once upon a time",
+        "One day, a little girl named Lily",
+        "Tom and his dog went to the",
+        "The sun was",
+    ];
+    for history in [true, false] {
+        state.history = if history {
+            retained.clone()
+        } else {
+            Default::default()
+        };
+        tuning::anneal(Knobs { history, ..knobs });
+        for (index, prompt) in prompts.iter().enumerate() {
+            let opening = [&[super::core_corpus::END][..], prompt.as_bytes()].concat();
+            let result = super::generation::generate_story(
+                &state,
+                &mut store,
+                &opening,
+                160,
+                512,
+                super::decoding::Decoder::Greedy,
+                &mut || Ok(None),
+            )?;
+            if history {
+                let expected = report["final"]["eval"]["samples"][index]["text"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing saved sample"))?;
+                ensure!(
+                    String::from_utf8_lossy(&result.raw_bytes) == expected,
+                    "saved generation mismatch"
+                );
+            }
+            println!(
+                "{}",
+                serde_json::json!({
+                    "history": history, "prompt": prompt,
+                    "text": String::from_utf8_lossy(&result.raw_bytes),
+                    "valid_utf8": result.valid_utf8, "stop_reason": result.stop_reason,
+                    "before_sha256": result.before_sha256, "after_sha256": result.after_sha256,
+                })
+            );
+        }
+    }
+    tuning::anneal(knobs);
+    state.history = retained;
+    state.validate_boundary()?;
+    Ok(())
+}

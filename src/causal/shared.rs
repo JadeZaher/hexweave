@@ -1,3 +1,5 @@
+//! Tied byte embeddings, immutable prefix rows and next-byte readout; see STUDY.md.
+
 use super::geometry::{Geometry, EVIDENCE_RULE, VOCAB};
 use super::tile_gradients::add_outer;
 use super::{norm, positions};
@@ -8,10 +10,14 @@ pub(super) struct Shared {
     pub geometry: Geometry,
     pub embedding: TernaryMatrix,
     pub version: u64,
+    pub weights: Option<super::connected_precision::Weights>,
+    /// Learned FP32 per-byte logit bias (VOCAB entries); None outside the connected protocol.
+    pub bias: Option<Vec<f32>>,
 }
 
 pub(super) struct Prefix {
     pub bytes: Vec<u8>,
+    /// Row-major byte-plus-position features; tiles read these without updating them.
     pub memory: Vec<f32>,
     pub inverse: Vec<f32>,
     pub shared_version: u64,
@@ -26,6 +32,10 @@ pub(super) struct Task {
     pub loss: f32,
     pub input_correction: Vec<f32>,
     pub embedding_gradient: Vec<f32>,
+    /// Softmax minus one-hot (the logit gradient) when a readout bias is present.
+    pub bias_gradient: Option<Vec<f32>>,
+    /// RMS of the routed output before readout normalization (1 / inverse).
+    pub output_rms: f32,
 }
 
 impl Readout {
@@ -44,6 +54,7 @@ impl Readout {
 }
 
 impl Prefix {
+    /// The current routed state starts at the last visible byte's embedding row.
     pub fn initial(&self, geometry: Geometry) -> &[f32] {
         &self.memory[self.memory.len() - geometry.width..]
     }
@@ -54,8 +65,10 @@ impl Shared {
         geometry.validate()?;
         Ok(Self {
             geometry,
+            weights: None,
             embedding: TernaryMatrix::new(geometry.width, VOCAB, seed)?,
             version: 0,
+            bias: None,
         })
     }
 
@@ -69,8 +82,10 @@ impl Shared {
         ensure!(rule == EVIDENCE_RULE, "shared evidence encoding mismatch");
         Ok(Self {
             geometry,
+            weights: None,
             version,
             embedding: TernaryMatrix::from_packed(geometry.width, VOCAB, packed)?,
+            bias: None,
         })
     }
 
@@ -78,6 +93,7 @@ impl Shared {
         self.embedding.packed_bytes()
     }
 
+    /// Rebuild all visible embedding rows for this anchor, including overlapping positions.
     pub fn prefix(&self, bytes: &[u8]) -> Result<Prefix> {
         ensure!(
             (1..=self.geometry.context).contains(&bytes.len()),
@@ -100,10 +116,19 @@ impl Shared {
         })
     }
 
+    /// RMS-normalized column `E[:, byte]` with no position: the connected predictor's label feature.
+    pub fn target_feature(&self, byte: u8) -> Result<Vec<f32>> {
+        Ok(norm::rms(&self.embedding_column(usize::from(byte))?)?.values)
+    }
+
+    /// Every readout path (training, replay, decoding, quantized views) adds the FP32 bias here.
     pub fn readout(&self, output: &[f32]) -> Result<Readout> {
         norm::vector(output, self.geometry.width)?;
         let normalized = norm::rms(output)?;
-        let logits = self.embedding_transpose(&normalized.values, self.logit_scale())?;
+        let mut logits = self.embedding_transpose(&normalized.values, self.logit_scale())?;
+        if let Some(bias) = &self.bias {
+            norm::add(&mut logits, bias)?;
+        }
         Ok(Readout { normalized, logits })
     }
 
@@ -112,6 +137,7 @@ impl Shared {
         (self.geometry.width as f32).sqrt().recip() / super::tuning::current().temperature
     }
 
+    /// Differentiate next-byte loss into the routed state and tied readout matrix E.
     pub fn task(&self, output: &[f32], target: u8) -> Result<Task> {
         let readout = self.readout(output)?;
         let loss = readout.loss(target)?;
@@ -136,6 +162,8 @@ impl Shared {
             loss,
             input_correction,
             embedding_gradient,
+            bias_gradient: self.bias.is_some().then_some(delta),
+            output_rms: readout.normalized.inverse.recip(),
         })
     }
 

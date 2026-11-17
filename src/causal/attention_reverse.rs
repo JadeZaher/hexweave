@@ -1,3 +1,5 @@
+//! Adjoint of factored single-query attention; see STUDY.md.
+
 use super::attention::{dot, weighted_sum, Cache};
 use super::norm;
 use super::tile::Tile;
@@ -53,6 +55,7 @@ pub(super) fn backward(
         cache.normalized.inverse,
         &normalized_adjoint,
     )?;
+    // The attention residual also sends upstream directly to the tile's input.
     norm::add(&mut result, upstream)?;
     Ok(result)
 }
@@ -116,6 +119,7 @@ fn score_adjoint(memory: &[f32], summary: &[f32], probabilities: &[f32]) -> Resu
         .map(|row| dot(row, summary))
         .collect();
     let mean = dot(probabilities, &scores);
+    // Softmax adjoint: p_i * (dL/dp_i - sum_j p_j * dL/dp_j).
     for (score, &probability) in scores.iter_mut().zip(probabilities) {
         *score = probability * (*score - mean);
     }
@@ -135,6 +139,7 @@ fn add_prefix(
         .zip(scores)
         .zip(probabilities)
     {
+        // A prefix row affects both its attention score and its weighted value.
         for ((out, &k), &v) in row.iter_mut().zip(key).zip(value) {
             *out += score * k;
             *out += probability * v;

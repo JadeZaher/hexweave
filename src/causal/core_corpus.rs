@@ -41,22 +41,38 @@ struct Manifest {
 pub(super) struct Corpus {
     train: File,
     length: u64,
+    /// Occurrences of each byte value in the train file, counted in its digest pass.
+    counts: [u64; 256],
     pub heldout: Vec<u8>,
     pub window: usize,
     identity: DataIdentity,
 }
 
-/// SHA-256 of a whole file, streamed in 1 MiB chunks.
-fn file_digest(file: &mut File) -> Result<String> {
-    let mut hasher = Sha256::new();
+/// Feed `reader` to `visit` in 1 MiB chunks until it ends; returns the byte total.
+fn stream(mut reader: impl Read, mut visit: impl FnMut(&[u8])) -> Result<u64> {
     let mut buffer = vec![0; 1 << 20];
+    let mut total = 0;
     loop {
-        let read = file.read(&mut buffer)?;
+        let read = reader.read(&mut buffer)?;
         if read == 0 {
-            return Ok(format!("{:x}", hasher.finalize()));
+            return Ok(total);
         }
-        hasher.update(&buffer[..read]);
+        visit(&buffer[..read]);
+        total += read as u64;
     }
+}
+
+/// SHA-256 and per-value byte counts of a whole file, from one pass in 1 MiB chunks.
+fn file_digest(file: &mut File) -> Result<(String, [u64; 256])> {
+    let mut hasher = Sha256::new();
+    let mut counts = [0; 256];
+    stream(file, |chunk| {
+        hasher.update(chunk);
+        for &byte in chunk {
+            counts[usize::from(byte)] += 1;
+        }
+    })?;
+    Ok((format!("{:x}", hasher.finalize()), counts))
 }
 
 /// The model's view for predicting `text[t]`: the last `window` bytes of `[START] + text[..t]`.
@@ -97,8 +113,13 @@ impl Corpus {
         let (train_entry, heldout_entry) = (entry("train.txt")?, entry("heldout.txt")?);
         let mut train = File::open(root.join("train.txt"))?;
         ensure!(
-            train.metadata()?.len() == train_entry.bytes
-                && file_digest(&mut train)? == train_entry.sha256,
+            train.metadata()?.len() == train_entry.bytes,
+            "corpus train file does not match its manifest"
+        );
+        // The pass that verifies the pinned bytes also counts them: no second read, no gap.
+        let (sha256, counts) = file_digest(&mut train)?;
+        ensure!(
+            sha256 == train_entry.sha256,
             "corpus train file does not match its manifest"
         );
         ensure!(
@@ -132,6 +153,7 @@ impl Corpus {
         Ok(Self {
             train,
             length: train_entry.bytes,
+            counts,
             heldout,
             window,
             identity,
@@ -190,6 +212,35 @@ impl Corpus {
     pub fn is_short(&self) -> bool {
         self.length < AHEAD_ANCHORS
     }
+
+    /// Occurrences of each byte value in the verified train file (the bytes cursors read).
+    pub fn byte_counts(&self) -> &[u64; 256] {
+        &self.counts
+    }
+
+    /// Read a fixed retention span only after all its targets have been observed.
+    pub fn retention_span(
+        &self,
+        start: u64,
+        scored: usize,
+        observed_targets: u64,
+    ) -> Result<Option<(Vec<u8>, usize)>> {
+        ensure!(
+            (1..=SPAN_BYTES).contains(&scored),
+            "invalid retention span length"
+        );
+        let end = start
+            .checked_add(scored as u64)
+            .context("retention offset overflow")?;
+        if end > observed_targets.min(self.length) {
+            return Ok(None);
+        }
+        let left = start.saturating_sub(self.window as u64 + SPAN_WARMUP as u64);
+        Ok(Some((
+            self.read(left, end)?,
+            usize::try_from(start - left)?,
+        )))
+    }
 }
 
 impl TrainingSource for Corpus {
@@ -223,5 +274,10 @@ impl TrainingSource for Corpus {
         self.validate(cursor)?;
         *cursor = self.cursor(cursor.supervised_targets + 1)?;
         Ok(())
+    }
+
+    /// A train-file cursor only: replay never addresses held-out bytes.
+    fn replay_cursor(&self, supervised_targets: u64) -> Result<Cursor> {
+        self.cursor(supervised_targets)
     }
 }

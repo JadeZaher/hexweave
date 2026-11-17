@@ -8,7 +8,7 @@ fn invoke(args: &[&str]) -> Output {
 }
 
 #[test]
-fn train_rejects_bad_invocations_and_configs_before_training() {
+fn train_and_complete_reject_bad_invocations_before_work() {
     let config = std::env::temp_dir().join(format!("hexweave-cli-{}.json", std::process::id()));
     std::fs::write(
         &config,
@@ -26,6 +26,76 @@ fn train_rejects_bad_invocations_and_configs_before_training() {
             "out must be work/core-runs/<name>",
         ),
         (vec!["resume"], "unknown command"),
+        (vec!["complete"], "expected complete --config"),
+        (
+            vec!["complete", "--config"],
+            "each complete option needs a value",
+        ),
+        (
+            vec!["complete", "--prompt", "x", "--prompt", "y"],
+            "unknown or duplicate",
+        ),
+        (vec!["complete", "--feedback", "sample"], "feedback must be"),
+        (
+            vec!["complete", "--trace-bytes", "many"],
+            "trace-bytes must be",
+        ),
+        (
+            vec![
+                "complete",
+                "--config",
+                "missing.json",
+                "--checkpoint",
+                "a000000000000",
+                "--prompt",
+                "X",
+                "--trace-bytes",
+                "17",
+            ],
+            "trace-bytes must be",
+        ),
+        (
+            vec![
+                "complete",
+                "--config",
+                "missing.json",
+                "--checkpoint",
+                "a000000000000",
+                "--prompt",
+                "X",
+                "--feedback",
+                "prompt-only",
+            ],
+            "requires a nonzero",
+        ),
+        (
+            vec![
+                "complete",
+                "--config",
+                "missing.json",
+                "--checkpoint",
+                "a000000000000",
+                "--prompt",
+                "X",
+                "--seed",
+                "3",
+            ],
+            "apply only with --top-p",
+        ),
+        (
+            vec![
+                "complete",
+                "--config",
+                "missing.json",
+                "--checkpoint",
+                "a000000000000",
+                "--prompt",
+                "X",
+                "--top-p",
+                "1.5",
+            ],
+            "top-p must be in (0, 1]",
+        ),
         (vec!["surprise"], "unknown command"),
     ] {
         let output = invoke(&args);

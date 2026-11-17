@@ -1,3 +1,5 @@
+//! Two-phase route credit and correction records; see STUDY.md for the backward-pass costs.
+
 use super::execution::{checked_tile, Trace};
 #[cfg(test)]
 use super::geometry::TILES;
@@ -42,6 +44,7 @@ pub(super) fn gather<S: TileStore>(
     let mut upstream = task.input_correction;
     let mut corrections = Vec::with_capacity(trace.frames.len());
     let mut prefix_adjoint = vec![0.0; prefix.memory.len()];
+    // Reverse the realized route, keeping its decisions fixed while differentiating the task.
     for frame in trace.frames.iter().rev() {
         corrections.push(upstream.clone());
         upstream = store.read(frame.tile_id, |tile| {
@@ -57,8 +60,10 @@ pub(super) fn gather<S: TileStore>(
             )
         })?;
     }
+    // Restore forward frame order for per-tile parameter gradients and history records.
     corrections.reverse();
     let final_row = prefix_adjoint.len() - state.geometry.width;
+    // The last prefix row also supplies x0, separate from its attention-memory contribution.
     norm::add(&mut prefix_adjoint[final_row..], &upstream)?;
     let mut embedding_gradient = task.embedding_gradient;
     state
@@ -167,8 +172,7 @@ fn commit_tiles<S: TileStore>(
     Ok(())
 }
 
-/// One history record per visited frame: its predictor features and unit-clipped correction,
-/// stamped with the trace's versions and the clock `opportunity`. Shared by training and replay.
+/// Stamp one unit-clipped correction per visited frame for training and replay; see STUDY.md.
 pub(super) fn records(
     state: &State,
     trace: &Trace,

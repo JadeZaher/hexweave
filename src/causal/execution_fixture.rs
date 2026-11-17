@@ -99,7 +99,10 @@ impl TrainingSource for Source {
 
 pub(super) struct Store {
     pub tiles: Vec<Tile>,
+    pub reads: [usize; TILES],
     pub updates: [usize; TILES],
+    pub fail_steps: bool,
+    pub fail_read: bool,
     pub fail_update: bool,
 }
 
@@ -113,7 +116,10 @@ impl Store {
             .collect::<Result<_>>()?;
         Ok(Self {
             tiles,
+            reads: [0; TILES],
             updates: [0; TILES],
+            fail_steps: false,
+            fail_read: false,
             fail_update: false,
         })
     }
@@ -137,7 +143,10 @@ impl Store {
             .collect::<Result<_>>()?;
         Ok(Self {
             tiles,
+            reads: [0; TILES],
             updates: [0; TILES],
+            fail_steps: false,
+            fail_read: false,
             fail_update: false,
         })
     }
@@ -147,7 +156,13 @@ impl TileStore for Store {
     fn versions(&self) -> Result<[u64; TILES]> {
         Ok(std::array::from_fn(|id| self.tiles[id].version))
     }
+    fn optimizer_steps(&self) -> Result<[u64; TILES]> {
+        ensure!(!self.fail_steps, "injected store metadata failure");
+        Ok(super::super::core_schedule::tile_steps())
+    }
     fn read<T>(&mut self, id: usize, visit: impl FnOnce(&Tile) -> Result<T>) -> Result<T> {
+        ensure!(!self.fail_read, "injected store read failure");
+        self.reads[id] += 1;
         visit(&self.tiles[id])
     }
     fn update<T>(&mut self, id: usize, visit: impl FnOnce(&mut Tile) -> Result<T>) -> Result<T> {

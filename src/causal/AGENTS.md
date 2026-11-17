@@ -1,11 +1,102 @@
-# Causal-prefix-v3 numerical modules
+# Causal model: current core and numerical references
+
+## Connected training
+
+The in-session owner request on 2026-11-03 authorizes connecting the shared-memory
+predictor architecture, implementing and independently reviewing it, and launching
+and monitoring a bounded fresh run. All weights and adaptive state start from
+scratch; no previous checkpoint is an initialization source. The connected
+profile (now `causal-connected-v5`) is selected by the `connected` config object through
+the existing `train` command and capped core owner. Its complete learning,
+causality, memory, optimizer and checkpoint contract is [CONNECTED.md](CONNECTED.md).
+Do not substitute the retained anchor-only v2 mechanism for that experiment.
+Verification and runtime outcomes belong in `docs/STATUS.md` and run receipts;
+the presence of source code is not validation evidence.
+
+Owner direction on November 4 additionally authorizes fresh connected
+FP32 forward training and immutable rounded-weight comparisons; see
+[precision design](CONNECTED.md#full-precision-learning-and-quantization-comparisons).
+The connected ternary protocol and its pinned checkpoints remain distinct from
+the FP32 protocol (now `causal-connected-fp32-v5`).
+
+Owner direction on November 6 removes the earlier gate option and makes the
+predictor learnable as one behavior: per-tile normalized targets, least-squares
+trust and trust-scaled local updates under protocol v2; see
+[calibrated predictor](CONNECTED.md#calibrated-predictor-and-trust-scaled-local-updates-v2).
+v1 checkpoints resume only under their pinned binaries.
+
+Connected protocol v3 (2026-11-07; unrelated to the archived v3 owner chain)
+follows the diagnosis of the v2 FP32 study in `docs/STATUS.md`. It adds
+decoupled weight decay with a hard master RMS cap per updated region, a saturating
+activation curve, a learned readout bias, one local Adam step per tile per
+anchor and a narrower predictor skip with a clipped target; see
+[the v3 section](CONNECTED.md#scale-control-saturating-curve-readout-bias-and-per-anchor-local-steps-v3).
+v1 and v2 checkpoints resume only under their pinned binaries.
+
+Connected protocol v4 (2026-11-07) follows the v3 pilot recorded in
+`docs/STATUS.md`. It RMS-normalizes every tile's output after the residual sum
+(the adjoint passes through the normalization) and, on a fresh start, initializes
+the readout bias to the training corpus' byte log-frequencies; the v4 configs also
+set `weight_decay` to 0.001. See
+[the v4 section](CONNECTED.md#residual-normalization-and-readout-prior-v4).
+v1, v2 and v3 checkpoints resume only under their pinned binaries.
+
+Connected protocol v5 (2026-11-07) follows the v4 full run. The correction
+predictor also reads the observed target byte's RMS-normalized embedding column
+(conditional synthetic gradients), only after that anchor's readout, and each
+tile update's decoupled decay uses the multiplier its step actually received (the
+gain after the uniform norm cap); E and the readout bias decay at the plain rate.
+v5.1 adds `connected.local_rate` (default 3e-4, in (0, 0.1], run identity), the
+rate of those predicted-credit tile steps and their decay; E, bias and routes keep
+`rate`, the predictor `predictor_rate`. Admission refuses
+`weight_decay * max(rate, local_rate) * gain_max >= 1`. v5.2 adds
+`connected.local_decay` (default `constant`, run identity), a schedule on that local
+rate by anchor index; `inverse_sqrt` scales it by `1 / sqrt(1 + anchor / anchors)`,
+and a schedule that can reach zero (cosine floor 0) is refused. v5.4 adds optional
+`connected.credit_mode` (`lanes` default, `anchor_exact`, `anchor_predicted`,
+`hybrid`) and `connected.slice_mode` (`full` default, `windowed`, `hybrid`),
+omitted from serialized identity when default so existing v5.2/v5.3 configs keep
+their run identity. Optional `connected.restart` (absent by default, run identity
+when present) floors each tile's local-rate factor and restarts its schedule after
+accumulated relative change; see
+[warm restarts](CONNECTED.md#warm-restarts-and-per-tile-rate-floor). Its per-tile
+training state (`TileRestart`, `TileSignal`: never in tile bundles, never read by
+completion or paging), the `forget`/`signal`/`stagger`/`clamp`/`replay`/`plasticity`
+options and the experimental Lambert law are in
+[per-tile training state](CONNECTED.md#per-tile-training-state),
+[restart options](CONNECTED.md#restart-options) and
+[Lambert plasticity](CONNECTED.md#lambert-plasticity-experimental). See
+[the v5 section](CONNECTED.md#label-conditioned-credit-predictor-and-gain-scaled-decay-v5).
+v1-v4 checkpoints and the pre-v5.2 v5 pilots resume only under their pinned binaries.
+
+Connected checkpoint completion uses `connected_completion` and frozen evaluation
+replay. It snapshots the exact named checkpoint into owned `work/inference/`
+scratch and loads only that copy, so it may run beside a live owner; it preserves
+the run's STOP and saved training state.
+It opens no corpus. Source-file and actual tile/Adam fingerprints, bounded
+residency, a cooperative inference deadline and RAII cleanup are part of the
+contract; see [read-only completion](CONNECTED.md#read-only-checkpoint-completion).
+
+Owner approval on 2026-11-03 authorizes the next full fresh study: bounded LRU
+tile/Adam caching, expanded frozen learning/retention measurements, independent
+review and a run of up to 24 hours or one public corpus pass. Count idle cached
+bundles together with outstanding leases against the configured decoded resident
+cap (`connected.resident_tiles`, default `workers`; CONNECTED.md §Write-behind paging).
+Dirty entries must flush before checkpoint publication; eviction failures poison
+the store. Keep update order and numerical identity unchanged. The full study
+uses the existing core owner as a persistent supervisor; the plan is
+`.omc/plans/connected-full-run-2026-11-03.md` at repository root.
+
+Start with [the architecture study guide](STUDY.md) for the current call path,
+equations, measured bottlenecks, memory costs and questions the evidence leaves
+open. Keep detailed teaching notes there and source annotations short.
 
 Archived v3 owner-chain, study, comparison and diagnostic sections:
 `../../archive/src/causal/AGENTS-history.md`.
 
 ## Core v2
 
-The production configuration now selects `causal-latent-v2`. The v1 description
+Configurations without `connected` select `causal-latent-v2`. The v1 description
 below records the retained numerical reference; `execution` and `Knobs::core`
 remain that reference for harness and span-scoring contracts. `Config::knobs`
 selects v2: `fit_predictor: false`, `history_ticks: 8`, plus `batch`, `decay`
@@ -17,16 +108,44 @@ under fixed weights. History makes this phase sequential: position n+1 needs
 position n's returned correction. It retains the original age-at-most-eight-ticks and version-lag-at-most-one
 policy used by Replay. Under fixed weights this can retain two anchors. The later parameter-gradient backward passes are independent;
 `core_gradients` uses up to four scoped workers over positions, one tile at a
-time. Workers receive and install the complete knobs explicitly. Gradients
-reduce in position order, with repeated frames in forward order; division is
+time. Workers receive and install the complete knobs explicitly. Position
+gradients are produced in groups of at most four, then added to one accumulator
+in original position order; at most five full tile gradients coexist. This
+bounds gradient retention independent of batch size, without bounding tile,
+optimizer, activation or checkpoint residency. Gradients reduce with repeated
+frames in forward order; division is
 by the full B, including positions that never visited a tile. Tiles commit in
 ID order, then tied E. Batch one avoids extra reduction arithmetic and worker
 threads, preserving its thread-local float latents. Float mode with B>1 is
 rejected. Batch is bounded to 1..=32; no GPU or larger-model execution is added.
+Workers are scoped per group, so larger batches create more threads per tile;
+measure the throughput tradeoff before using this change in a training study.
+Core routing, correction gathering and tile commits use `TileStore` access;
+the production implementation remains `ResidentStore`, and latent optimizer
+state and checkpoint buffers are not paged by this interface change.
+Step-start exploration counts also come from the store; the resident store
+still derives them from the thread-local optimizer state.
+Checkpoint save streams and hashes tile payloads one tile at a time and latent
+weights/moments by borrowed map entry, preserving the existing byte format.
+Restore hashes while decoding individual tiles and latent vectors, and installs
+optimizer state only after both payloads verify. It still reconstructs all
+resident state; this does not establish bounded residency or a physical-memory
+guarantee.
+
+`core_paged_experiment` is test-only: a single decoded tile and its latent Adam
+state are loaded from one hash-checked disk payload, while shared E remains in
+the thread-local optimizer. Per-tile maximum step metadata stays available for
+exploration after eviction. The fixture compares its training trajectory with
+the resident store and asserts one live tile during steps; its final parity
+snapshot intentionally reconstructs the whole fixture. It is not a production
+store, physical RSS proof, checkpoint protocol, crash recovery mechanism, or
+authorization for larger geometry. Read/write failure and interruption
+handling require independent review before any promotion.
 
 Every position uses the step-start baseline; after commit, baseline updates
-and loss accounting run in position order. Cosine decay is evaluated at the
-first anchor of the step, with constant decay the default. Exploration is a
+and loss accounting run in position order. Cosine or inverse square-root
+(`inverse_sqrt`) decay is evaluated at the first anchor of the step, with constant
+decay the default. Exploration is a
 pure seed/anchor/depth hash: at depths 1 and above it selects the legal
 neighbor with the fewest cumulative optimizer steps (lowest-ID tie break),
 never halt. Counts are frozen at step start and come from checkpointed Adam
@@ -120,7 +239,8 @@ is read by window from disk, so memory stays flat however large it grows. Its
 evaluation is teacher-forced held-out bits per byte over `eval_spans` fixed spans
 (a `Config` field, default 16, not part of the run identity) of 128 bytes in both
 forward modes on the same weights (`dev_*` for the run's mode, `alternate_*` for
-the other), plus greedy continuations of four story openings.
+the other), plus a greedy and a nucleus-sampled continuation of four story
+openings, each after a full window of held-out text (§Generation).
 `train_ahead_frozen_*` frozen-scores the next `AHEAD_ANCHORS` (512) train bytes
 ahead of the cursor the same way (`Corpus::ahead_span`, wrapping once at the
 file end for byte selection; the prefix context before it clips at the file
@@ -400,7 +520,9 @@ credit is detached and never modifies returned input/prefix corrections.
 `Shared::task` returns the tied readout gradient. Execution adds the returned x0
 correction into the final prefix row, then `add_prefix_gradient` scatters every
 prefix occurrence into that same gradient. Apply E once after complete anchor
-credit gathering. Local predicted corrections never update E or read labels.
+credit gathering. On this core path local predicted corrections never update E or
+read labels; connected v5 local predictions do read the already-observed target
+byte's label feature ([CONNECTED.md](CONNECTED.md#label-conditioned-credit-predictor-and-gain-scaled-decay-v5)).
 `predictor.rs` trains only on real clipped returned corrections, independently
 versioned from E; feature/target observations are detached.
 
@@ -481,6 +603,12 @@ copies according to the integrated lifetime ledger before claiming that bound.
 conditional derivatives, two-phase sink equivalence, detached policy credit,
 tied E readout plus repeated-prefix derivatives, and fail-closed versioned update
 and state decoding. Register it only under cfg(test) in the integrating module.
+
+Tests that write files take a `scratch_dir::ScratchDir`: a unique
+`work/validation/<prefix>-<pid>-<nanos>-<seq>` directory that its guard removes on
+drop, also while a failing test unwinds, so sweeps leave no per-run directories
+behind (owner request: clean as we go). Declare the guard before the stores and
+corpora that live in it, so it drops last.
 
 `attention.rs` and `attention_reverse.rs` implement the v2 single-query
 factorization. `attention_contracts` compares every Q/K/V/O, x and M derivative
@@ -578,11 +706,50 @@ modules; their helper files are nested by explicit path.
 `causal plan` returns configuration and payload arithmetic without constructing
 weights, opening data, selecting a numerical kernel or starting a process.
 
+### Generation
+
 Generation accepts nonempty UTF8 prompts and rejects requests exceeding context.
 It warms `replay::Replay` up from the prompt's own last `SPAN_WARMUP` bytes,
 then replays each generated byte's history like training (not zero history),
-uses greedy legal routes and lowest-byte tie breaking, stops on newline or byte
-budget, and returns raw bytes without UTF8/JSON repair. Evaluation
+uses greedy legal routes, and returns raw bytes without UTF8/JSON repair. Each
+byte comes from a `decoding::Decoder`: greedy (lowest byte on ties) or nucleus
+sampling (Holtzman et al. 2019, arXiv:1904.09751), which draws from the smallest
+most-probable set holding top-p of the tempered mass with
+`assay_update::draw(seed, position)`, so a sample is a pure function of logits,
+settings, seed and byte position. General generation stays greedy and stops on
+newline or byte budget. Corpus story generation instead preserves newlines and
+stops before the END marker or at the byte budget; its samples record stop
+reason and UTF8 validity. Each prediction uses the most recent corpus-window
+bytes, with positions reset at the beginning of that slice.
+
+Story openings (`generation_policy: story-window-v2`) end a full training window
+with the prompt: `decoding::story_opening` prepends public held-out text ending
+at an evenly spaced story boundary. Positions count from the first visible byte
+and training predicts every byte from a full window, so the newest byte always
+sits at position `window - 1`. The v1 opening, `END + prompt`, put it at the
+prompt's length, a layout training almost never produced; on the reference
+run's 2.216 bits/byte checkpoint it turned "Once upon a time" into
+single-letter repeats, while a full window gave words (`docs/STATUS.md`
+§Reference path). Evaluations record a greedy and a nucleus continuation
+(temperature 1.0, top-p 0.9, seed = prompt index) per story prompt, prompt k
+using boundary k of four. Connected generation uses the same openings and
+decoder (CONNECTED.md, policy v3).
+
+`hexweave complete` loads an explicitly named corpus checkpoint, checks its
+run identity, hashes and cursor corpus pin, opens the verified corpus for the
+held-out opening (the median story boundary), and emits a bounded read-only
+continuation without launching a worker. `--top-p P [--temperature T]
+[--seed N]` selects nucleus sampling (defaults 1.0 and 0); connected
+checkpoints accept it too. It targets the
+currently supported candidate geometry and isolates optimizer state in a fresh
+thread, including for library callers. It
+rejects an over-context request before loading the checkpoint. The reported
+v2 immutability fingerprint covers packed model and continuation state, not the
+thread-local latent optimizer map. Connected completion additionally fingerprints
+tile/Adam state and follows the connected contract above. The prompt and leading marker must fit the
+model context; the byte limit is independently bounded at 1,023.
+The frozen teacher-forced scoring and best-checkpoint selection are unchanged.
+Evaluation
 uses only the development Dataset, exact pinned prompts and answer-only teacher
 forcing; masks partition answer/citation/format NLL sums and denominators.
 Generation scoring preserves each output, UTF8/JSON validity, exact answer/
@@ -598,7 +765,8 @@ scientific continuation state may not. These checks establish immutability only,
 not assistant quality, held-out independence or original-F equivalence.
 
 generation_contracts checks deterministic ties/newlines, context/input limits,
-STOP, invalid UTF8 preservation, immutable state and strict output JSON shape.
+STOP, invalid UTF8 preservation, immutable state, strict output JSON shape,
+nucleus truncation and proportions, and story-opening boundary selection.
 
 ## Generic evidence-data compatibility
 

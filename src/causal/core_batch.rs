@@ -4,7 +4,6 @@ use super::credit::{self, Credit};
 use super::cursor::Cursor;
 use super::execution::{Step, Trace, TrainingSource};
 use super::geometry::TILES;
-use super::resident::ResidentStore;
 use super::shared::Prefix;
 use super::state::{count, Boundary, State};
 use super::store_api::TileStore;
@@ -12,6 +11,7 @@ use super::telemetry::{self, Phase};
 use super::{core_gradients, core_route, core_schedule, tuning};
 use anyhow::{ensure, Context, Result};
 
+/// One retained prefix, route tape and correction bundle per batch position; see STUDY.md.
 pub(super) struct Position {
     pub prefix: Prefix,
     pub trace: Trace,
@@ -19,9 +19,9 @@ pub(super) struct Position {
 }
 
 /// Complete exactly one configured optimizer step, or poison the entered state on error.
-pub(super) fn step<S: TrainingSource>(
+pub(super) fn step<S: TrainingSource, T: TileStore>(
     state: &mut State,
-    store: &mut ResidentStore,
+    store: &mut T,
     source: &S,
     threaded: bool,
 ) -> Result<Vec<Step>> {
@@ -54,15 +54,17 @@ pub(super) fn step<S: TrainingSource>(
     result
 }
 
-fn prepare<S: TrainingSource>(
+/// Build positions sequentially under fixed weights, feeding each correction into history.
+pub(super) fn prepare<S: TrainingSource, T: TileStore>(
     state: &mut State,
-    store: &mut ResidentStore,
+    store: &mut T,
     source: &S,
 ) -> Result<(Vec<Position>, Cursor)> {
     let knobs = tuning::current();
-    let counts = core_schedule::tile_steps();
+    let counts = store.optimizer_steps()?;
     let mut cursor = state.cursor.clone();
     let mut positions = Vec::with_capacity(knobs.batch as usize);
+    // History couples adjacent positions even though no parameter changes inside this loop.
     for offset in 0..u64::from(knobs.batch) {
         let anchor = state
             .global_opportunity
@@ -86,6 +88,7 @@ fn prepare<S: TrainingSource>(
         })?;
         telemetry::route(&trace);
         let target = telemetry::time(Phase::Data, || source.anchor_target(&cursor))?;
+        // Phase 1 returns input/prefix corrections; tile gradients are recomputed at commit.
         let credit = telemetry::time(Phase::Gather, || {
             credit::gather(state, store, &prefix, &trace, target.byte)
         })?;
@@ -106,6 +109,7 @@ fn prepare<S: TrainingSource>(
             Ok(())
         })?;
         source.advance_anchor(&mut cursor)?;
+        // Overlapping byte windows remain separate embedded prefixes until the batch commits.
         positions.push(Position {
             prefix,
             trace,
@@ -115,9 +119,10 @@ fn prepare<S: TrainingSource>(
     Ok((positions, cursor))
 }
 
-fn commit(
+/// Recompute and commit visited tiles in ID order, then apply the shared embedding once.
+fn commit<T: TileStore>(
     state: &mut State,
-    store: &mut ResidentStore,
+    store: &mut T,
     positions: &[Position],
     threaded: bool,
 ) -> Result<()> {
@@ -128,20 +133,18 @@ fn commit(
         {
             continue;
         }
-        let gradient = telemetry::time(Phase::TileBackward, || {
-            core_gradients::mean(
-                &store.tiles[id],
-                positions,
-                state.baseline,
-                tuning::current(),
-                threaded,
-            )
+        let (transitions, version) = store.update(id, |tile| {
+            let gradient = telemetry::time(Phase::TileBackward, || {
+                core_gradients::mean(tile, positions, state.baseline, tuning::current(), threaded)
+            })?;
+            let transitions = telemetry::time(Phase::TileApply, || tile.apply(&gradient))?;
+            Ok((transitions, tile.version))
         })?;
-        let transitions = telemetry::time(Phase::TileApply, || store.tiles[id].apply(&gradient))?;
-        state.tile_versions[id] = store.tiles[id].version;
+        state.tile_versions[id] = version;
         state.counters.transitions(transitions)?;
         count(&mut state.counters.anchor_tile_commits, 1)?;
     }
+    // E is tied: every position contributes both readout and prefix-embedding credit.
     let mut embedding = positions[0].credit.embedding_gradient.clone();
     for position in &positions[1..] {
         for (sum, value) in embedding
@@ -163,9 +166,9 @@ fn commit(
     count(&mut state.counters.optimizer_steps, 1)
 }
 
-fn complete<S: TrainingSource>(
+fn complete<S: TrainingSource, T: TileStore>(
     state: &mut State,
-    store: &mut ResidentStore,
+    store: &mut T,
     source: &S,
     threaded: bool,
 ) -> Result<Vec<Step>> {
@@ -176,6 +179,7 @@ fn complete<S: TrainingSource>(
     tuning::anneal(original);
     committed?;
     let mut steps = Vec::with_capacity(positions.len());
+    // All gradients used the step-start baseline; update its moving mean only after commit.
     for position in positions {
         let mut seen = 0;
         for frame in &position.trace.frames {

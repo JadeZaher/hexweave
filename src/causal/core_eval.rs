@@ -1,8 +1,9 @@
 //! Core-path evaluations: science dev generation and the retrieval-drill probes; see AGENTS.md §core.
 
 use super::assay_source::Source as AssaySource;
-use super::core_corpus::{window_before, Corpus, AHEAD_ANCHORS, END, SPAN_BYTES};
+use super::core_corpus::{window_before, Corpus, AHEAD_ANCHORS, SPAN_BYTES};
 use super::data::Dataset;
+use super::decoding::{story_opening, Decoder};
 use super::evaluation::{self, Limits, Loss};
 use super::execution::forward_path;
 use super::generation::{self, Terminal};
@@ -20,14 +21,16 @@ const STORY_PROMPTS: [&str; 4] = [
     "Tom and his dog went to the",
     "The sun was",
 ];
+/// Temperature and top-p of the sampled story continuations; see AGENTS.md §Generation.
+const SAMPLING: (f64, f64) = (1.0, 0.9);
 
 fn per_byte(loss: &Loss) -> f64 {
     loss.nll_sum / loss.targets.max(1) as f64
 }
 
-/// Held-out and train-ahead bits per byte in both forward modes, plus greedy story-opening
-/// continuations; `eval_spans` is the configured held-out sample size (`Config::eval_spans`,
-/// default 16, not part of the run identity); see AGENTS.md §core.
+/// Held-out and train-ahead bits per byte in both forward modes, plus greedy and sampled
+/// full-window story continuations; `eval_spans` is the configured held-out sample size
+/// (`Config::eval_spans`, default 16, not part of the run identity); see AGENTS.md §core.
 pub(super) fn corpus(
     state: &State,
     store: &mut ResidentStore,
@@ -43,11 +46,33 @@ pub(super) fn corpus(
     let (ahead, ahead_targets) = train_ahead_nll(state, store, corpus)?;
     let mut never = || -> Result<Option<Terminal>> { Ok(None) };
     let mut samples = Vec::with_capacity(STORY_PROMPTS.len());
-    for prompt in STORY_PROMPTS {
-        let opening = [&[END][..], prompt.as_bytes()].concat();
-        let generation = generation::generate(state, store, &opening, 160, &mut never)?;
+    let (temperature, top_p) = SAMPLING;
+    for (slot, prompt) in STORY_PROMPTS.iter().enumerate() {
+        let (slots, bytes) = (STORY_PROMPTS.len(), prompt.as_bytes());
+        let opening = story_opening(&corpus.heldout, corpus.window, slot, slots, bytes)?;
+        let mut continue_with = |decoder| {
+            generation::generate_story(
+                state,
+                store,
+                &opening,
+                160,
+                corpus.window,
+                decoder,
+                &mut never,
+            )
+        };
+        let greedy = continue_with(Decoder::Greedy)?;
+        let seed = slot as u64;
+        let sampled = continue_with(Decoder::Nucleus {
+            temperature,
+            top_p,
+            seed,
+        })?;
         samples.push(
-            json!({ "prompt": prompt, "text": String::from_utf8_lossy(&generation.raw_bytes) }),
+            json!({ "prompt": prompt, "text": String::from_utf8_lossy(&greedy.raw_bytes),
+                "valid_utf8": greedy.valid_utf8, "stop_reason": greedy.stop_reason,
+                "sampled_text": String::from_utf8_lossy(&sampled.raw_bytes),
+                "sampled_valid_utf8": sampled.valid_utf8, "sampled_stop_reason": sampled.stop_reason }),
         );
     }
     let mode = |float: bool| if float { "float" } else { "ternary" };
@@ -55,7 +80,8 @@ pub(super) fn corpus(
     Ok(json!({
         "dev_nll_per_byte": own, "dev_bits_per_byte": bits(own), "forward": mode(float),
         "alternate_forward": mode(!float), "alternate_bits_per_byte": bits(alternate),
-        "heldout_targets": targets, "samples": samples,
+        "heldout_targets": targets, "samples": samples, "generation_policy": "story-window-v2",
+        "sampling": { "temperature": temperature, "top_p": top_p, "seed": "prompt index" },
         "train_ahead_frozen_nll_per_byte": ahead, "train_ahead_frozen_bits_per_byte": ahead.map(bits),
         "train_ahead_frozen_targets": ahead_targets,
     }))

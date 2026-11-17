@@ -8,6 +8,7 @@ use super::tile_gradients::TileGradients;
 use super::tuning::{self, Knobs};
 use anyhow::{ensure, Result};
 
+/// Sum this position's repeated visits; an unvisited tile contributes a dense zero gradient.
 fn position(tile: &Tile, position: &Position, baseline: f32) -> Result<TileGradients> {
     let mut gradient = TileGradients::zeros(tile.geometry, tile.id)?;
     let advantage = position.credit.loss - baseline;
@@ -35,6 +36,7 @@ fn position(tile: &Tile, position: &Position, baseline: f32) -> Result<TileGradi
     Ok(gradient)
 }
 
+/// Reduce in position order, dividing by the whole batch rather than the tile's visit count.
 pub(super) fn mean(
     tile: &Tile,
     positions: &[Position],
@@ -42,50 +44,109 @@ pub(super) fn mean(
     knobs: Knobs,
     threaded: bool,
 ) -> Result<TileGradients> {
-    let gradients = if threaded && positions.len() > 1 {
+    ensure!(!positions.is_empty(), "empty batch");
+    let mut sum = None;
+    // Four results plus one accumulator bound gradient retention, not the retained batch tapes.
+    for chunk in positions.chunks(4) {
+        let gradients = gradients(
+            tile,
+            chunk,
+            baseline,
+            knobs,
+            threaded && positions.len() > 1,
+        )?;
+        for gradient in gradients {
+            if let Some(sum) = &mut sum {
+                add(sum, gradient);
+            } else {
+                sum = Some(gradient);
+            }
+        }
+    }
+    finish(sum.unwrap(), positions.len(), tile.geometry, tile.id)
+}
+
+fn gradients(
+    tile: &Tile,
+    positions: &[Position],
+    baseline: f32,
+    knobs: Knobs,
+    threaded: bool,
+) -> Result<Vec<TileGradients>> {
+    if threaded {
         ensure!(!knobs.float_forward, "workers cannot access float latents");
+        // Each group creates fresh workers; scope lifetime is also a thread-creation cost.
         std::thread::scope(|scope| -> Result<Vec<TileGradients>> {
-            let workers = positions.len().min(4);
-            let handles: Vec<_> = (0..workers)
-                .map(|worker| {
-                    scope.spawn(move || -> Result<Vec<(usize, TileGradients)>> {
+            let handles: Vec<_> = positions
+                .iter()
+                .map(|position| {
+                    scope.spawn(move || -> Result<TileGradients> {
                         tuning::install(knobs);
-                        (worker..positions.len())
-                            .step_by(workers)
-                            .map(|index| Ok((index, position(tile, &positions[index], baseline)?)))
-                            .collect()
+                        self::position(tile, position, baseline)
                     })
                 })
                 .collect();
-            let mut indexed = Vec::with_capacity(positions.len());
+            let mut ordered = Vec::with_capacity(positions.len());
             let mut error = None;
+            // Join in position order so scheduling cannot reorder floating-point additions.
             for handle in handles {
                 match handle
                     .join()
                     .map_err(|_| anyhow::anyhow!("gradient worker panicked"))
                     .and_then(|result| result)
                 {
-                    Ok(values) => indexed.extend(values),
+                    Ok(gradient) => ordered.push(gradient),
                     Err(found) => error = Some(found),
                 }
             }
             if let Some(error) = error {
                 return Err(error);
             }
-            indexed.sort_by_key(|(index, _)| *index);
-            Ok(indexed.into_iter().map(|(_, gradient)| gradient).collect())
-        })?
+            Ok(ordered)
+        })
     } else {
         positions
             .iter()
             .map(|p| position(tile, p, baseline))
-            .collect::<Result<Vec<_>>>()?
-    };
-    reduce(gradients, tile.geometry, tile.id)
+            .collect::<Result<Vec<_>>>()
+    }
 }
 
-fn reduce(gradients: Vec<TileGradients>, geometry: Geometry, id: usize) -> Result<TileGradients> {
-    let count = gradients.len();
+fn add(sum: &mut TileGradients, gradient: TileGradients) {
+    for (output, values) in sum.values.iter_mut().zip(gradient.values) {
+        for (value, add) in output.iter_mut().zip(values) {
+            *value += add;
+        }
+    }
+}
+
+fn finish(
+    mut sum: TileGradients,
+    count: usize,
+    geometry: Geometry,
+    id: usize,
+) -> Result<TileGradients> {
+    if count > 1 {
+        for values in &mut sum.values {
+            for value in values {
+                *value /= count as f32;
+            }
+        }
+    }
+    sum.validate(geometry, id)?;
+    Ok(sum)
+}
+
+#[cfg(test)]
+pub(super) fn reference(
+    tile: &Tile,
+    positions: &[Position],
+    baseline: f32,
+) -> Result<TileGradients> {
+    let gradients = positions
+        .iter()
+        .map(|p| position(tile, p, baseline))
+        .collect::<Result<Vec<_>>>()?;
     let mut iter = gradients.into_iter();
     let mut sum = iter.next().ok_or_else(|| anyhow::anyhow!("empty batch"))?;
     for gradient in iter {
@@ -95,13 +156,13 @@ fn reduce(gradients: Vec<TileGradients>, geometry: Geometry, id: usize) -> Resul
             }
         }
     }
-    if count > 1 {
+    if positions.len() > 1 {
         for values in &mut sum.values {
             for value in values {
-                *value /= count as f32;
+                *value /= positions.len() as f32;
             }
         }
     }
-    sum.validate(geometry, id)?;
+    sum.validate(tile.geometry, tile.id)?;
     Ok(sum)
 }

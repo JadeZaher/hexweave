@@ -6,6 +6,7 @@ use super::tile::Tile;
 use anyhow::{ensure, Result};
 
 pub(super) struct ResidentStore {
+    // Sparse route visits select computation; this Vec still owns every packed tile.
     pub tiles: Vec<Tile>,
 }
 
@@ -37,12 +38,16 @@ impl TileStore for ResidentStore {
         Ok(std::array::from_fn(|id| self.tiles[id].version))
     }
 
+    fn optimizer_steps(&self) -> Result<[u64; TILES]> {
+        Ok(super::core_schedule::tile_steps())
+    }
+
     fn read<T>(&mut self, id: usize, visit: impl FnOnce(&Tile) -> Result<T>) -> Result<T> {
         visit(&self.tiles[id])
     }
 
-    #[cfg(test)]
     fn update<T>(&mut self, id: usize, visit: impl FnOnce(&mut Tile) -> Result<T>) -> Result<T> {
+        // Publication happens at checkpoints; returning from this callback does not evict.
         visit(&mut self.tiles[id])
     }
 }

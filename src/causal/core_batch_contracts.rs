@@ -12,6 +12,10 @@ use super::tuning::{self, Knobs};
 use super::{core_batch, core_checkpoint};
 use anyhow::Result;
 
+#[path = "execution_fixture.rs"]
+#[allow(clippy::duplicate_mod, dead_code)]
+mod fixture;
+
 fn v2(batch: u32) -> Knobs {
     Knobs {
         batch,
@@ -81,7 +85,7 @@ fn batch_one_matches_v1_over_twelve_anchors() -> Result<()> {
 fn threaded_batch_matches_sequential_and_resumes_exactly() -> Result<()> {
     let source = assay()?;
     let drill = Drill::new(&source, 7)?;
-    for history in [true, false] {
+    for (batch, history) in [(4, true), (4, false), (8, true)] {
         let knobs = Knobs {
             history,
             temperature: 2.0,
@@ -92,7 +96,7 @@ fn threaded_batch_matches_sequential_and_resumes_exactly() -> Result<()> {
                 anchors: 12,
                 floor: 0.1,
             },
-            ..v2(4)
+            ..v2(batch)
         };
         let _guard = tuning::scoped(knobs);
         let (mut sequential, mut store) = fresh(&drill)?;
@@ -119,6 +123,79 @@ fn threaded_batch_matches_sequential_and_resumes_exactly() -> Result<()> {
             expected_state
         );
         std::fs::remove_dir_all(out)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn chunked_gradients_match_full_batch_reduction() -> Result<()> {
+    let source = assay()?;
+    let drill = Drill::new(&source, 7)?;
+    let knobs = Knobs {
+        explore: 0.4,
+        ..v2(8)
+    };
+    let _guard = tuning::scoped(knobs);
+    let (mut state, mut store) = fresh(&drill)?;
+    let (positions, _) = core_batch::prepare(&mut state, &mut store, &drill)?;
+    for count in [5, 8] {
+        let positions = &positions[..count];
+        for tile in &store.tiles {
+            let reference = super::core_gradients::reference(tile, positions, state.baseline)?;
+            for threaded in [false, true] {
+                if threaded {
+                    tuning::install(Knobs {
+                        attention_scale: 3.0,
+                        ..knobs
+                    });
+                }
+                let actual =
+                    super::core_gradients::mean(tile, positions, state.baseline, knobs, threaded)?;
+                tuning::install(knobs);
+                for (a, b) in actual.values.iter().zip(&reference.values) {
+                    assert!(
+                        a.iter().zip(b).all(|(a, b)| a.to_bits() == b.to_bits()),
+                        "gradient mismatch: tile {}, positions {count}, threaded {threaded}",
+                        tile.id
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn batch_uses_store_updates_and_poison_on_store_failure() -> Result<()> {
+    let source = assay()?;
+    let drill = Drill::new(&source, 7)?;
+    let knobs = v2(4);
+    let _guard = tuning::scoped(knobs);
+    let (mut state, mut resident) = fresh(&drill)?;
+    core_batch::step(&mut state, &mut resident, &drill, false)?;
+    let expected = fingerprint(&state, &resident)?;
+
+    tuning::install(knobs);
+    let (mut state, _) = fresh(&drill)?;
+    let mut store = fixture::Store::with_geometry(Geometry::candidate(), 7)?;
+    core_batch::step(&mut state, &mut store, &drill, false)?;
+    assert_eq!(
+        store.reads.iter().sum::<usize>() as u64,
+        2 * state.counters.visits
+    );
+    assert!(store.updates.iter().any(|count| *count > 0));
+    let resident = ResidentStore::from_tiles(store.tiles, Geometry::candidate())?;
+    assert_eq!(fingerprint(&state, &resident)?, expected);
+
+    for failure in ["steps", "read", "update"] {
+        tuning::install(knobs);
+        let (mut state, _) = fresh(&drill)?;
+        let mut store = fixture::Store::with_geometry(Geometry::candidate(), 7)?;
+        store.fail_steps = failure == "steps";
+        store.fail_read = failure == "read";
+        store.fail_update = failure == "update";
+        assert!(core_batch::step(&mut state, &mut store, &drill, false).is_err());
+        assert_eq!(state.boundary, super::state::Boundary::Poisoned);
     }
     Ok(())
 }
@@ -166,12 +243,16 @@ fn batch_config_rejects_invalid_resource_and_resume_boundaries() -> Result<()> {
         ("explore", json!(1.0)),
         ("decay", json!({"kind":"cosine","anchors":0,"floor":0.1})),
         ("decay", json!({"kind":"cosine","anchors":32,"floor":-0.1})),
+        ("decay", json!({"kind":"inverse_sqrt","anchors":0})),
     ] {
         let mut invalid = base.clone();
         invalid[field] = value;
         let config: super::core_config::Config = serde_json::from_value(invalid)?;
         assert!(config.validate().is_err(), "accepted invalid {field}");
     }
+    let mut scheduled = base.clone();
+    scheduled["decay"] = json!({"kind":"inverse_sqrt","anchors":32});
+    serde_json::from_value::<super::core_config::Config>(scheduled)?.validate()?;
     let valid: super::core_config::Config = serde_json::from_value(base)?;
     valid.validate()?;
     Ok(())

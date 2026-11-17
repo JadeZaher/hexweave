@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software or its results, please cite it as below."
+title: "Hexweave: bounded-residency training of a hex-routed byte-level language model"
+type: software
+authors:
+  - family-names: Zaher
+    given-names: Jade
+repository-code: "https://github.com/JadeZaher/hexweave"
+license: Apache-2.0
+date-released: 2026-11-16

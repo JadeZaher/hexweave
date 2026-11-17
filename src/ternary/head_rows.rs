@@ -1,3 +1,5 @@
+//! Scalar packed row-block products used by causal attention; see AGENTS.md.
+
 use super::{accumulate, validate_vector, TernaryMatrix};
 use anyhow::{ensure, Result};
 
@@ -12,6 +14,7 @@ impl TernaryMatrix {
         self.check_rows(start, count)?;
         validate_vector(input, self.cols)?;
         let mut output = vec![0.0; count];
+        // Only this head's rows are read; each output keeps ascending-column summation.
         for (offset, sum) in output.iter_mut().enumerate() {
             for (column, &value) in input.iter().enumerate() {
                 accumulate(sum, self.read((start + offset) * self.cols + column), value);
@@ -34,6 +37,7 @@ impl TernaryMatrix {
         self.check_rows(start, count)?;
         validate_vector(input, count)?;
         let mut output = vec![0.0; self.cols];
+        // No padded full-width query or decoded matrix; selected rows stay scalar.
         for (offset, &value) in input.iter().enumerate() {
             for (column, sum) in output.iter_mut().enumerate() {
                 accumulate(sum, self.read((start + offset) * self.cols + column), value);

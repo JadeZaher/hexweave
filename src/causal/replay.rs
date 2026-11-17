@@ -1,4 +1,4 @@
-//! History replay for evaluation and generation: rebuilds training's `history` input from each position's actual next byte with frozen weights; see AGENTS.md §core.
+//! Rebuild local correction history under frozen weights; see STUDY.md for evaluation costs.
 
 use super::credit;
 use super::execution::Trace;
@@ -21,8 +21,7 @@ pub(super) struct Replay {
 }
 
 impl Replay {
-    /// The `history` input for the next forward pass: zero when the knob is off, else training's
-    /// prune then mean.
+    /// Return zero when history is disabled; otherwise prune and average retained corrections.
     pub fn input(&mut self, state: &State) -> Result<Vec<f32>> {
         if !tuning::current().history {
             return Ok(vec![0.0; state.geometry.width]);
@@ -32,10 +31,7 @@ impl Replay {
         self.history.mean(state.geometry)
     }
 
-    /// Record this position's corrections toward `target`, as training does after each anchor,
-    /// without touching any weight. When the knob is off this skips `credit::gather`'s full
-    /// backward pass entirely and returns the same loss straight from the readout (matching
-    /// `Shared::task`, which `gather` would otherwise compute identically).
+    /// Observe a known or emitted target without updating weights; see STUDY.md for the distinction.
     pub fn observe<S: TileStore>(
         &mut self,
         state: &State,
@@ -48,6 +44,7 @@ impl Replay {
             self.clock += TICKS_PER_ANCHOR;
             return state.shared.readout(&trace.output)?.loss(target);
         }
+        // History-on inference still runs correction backward; it also computes unused E credit.
         let credit = credit::gather(state, store, prefix, trace, target)?;
         let records = credit::records(
             state,

@@ -1,0 +1,4 @@
+{
+  "rust-analyzer.cargo.targetDir": "work/target/rust-analyzer",
+  "rust-analyzer.hover.actions.references.enable": true
+}

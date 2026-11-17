@@ -29,9 +29,22 @@ reviews pass. Never silently download models, start servers or use cloud;
 background-worker and cleanup rules are unchanged.
 
 Keep four CPU threads, a 1 GiB device reserve and a 12 GiB owned-tree RSS ceiling
-as future admission requirements, not guarantees of the current fixture. There
-is no automatic resume (core runs resume only when a config says so), checkpoint
-migration or background worker in this seed.
+as future admission requirements, not guarantees of the current fixture.
+Owner decision 2026-11-04 authorizes read-only connected checkpoint inference
+and opt-in bounded recovery after clean core memory stops. Resume uses verified
+saved state and the pinned executable, retains exclusive ownership through the
+recovery wait, respects operator STOP and deducts consumed run time. Recovery
+does not authorize checkpoint migration, reboot restart or an unbounded worker;
+the lifecycle contract is in `scripts/AGENTS.md`.
+
+Owner direction on 2026-11-04 authorizes a fresh connected FP32-forward study
+and subsequent measured quantization comparisons. Preserve predictive local
+credit, shared memory, curves, routing and bounded tile ownership. Implement and
+independently review precision-aware numerical/checkpoint behavior before a
+bounded pilot and a fresh run through the existing capped owner. Gracefully stop
+the earlier study before launching the replacement; preserve its final state.
+Quantized inference comparisons must leave the FP32 checkpoint unchanged and
+must not claim compressed-model quality or speed without measurements.
 
 Use focused author/reviewer tasks. Apply all review fixes before one integrated
 test/lint sweep at the end. Review must be independent from authoring. Preserve

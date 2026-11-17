@@ -70,9 +70,11 @@ def lock(out: Path) -> Path:
     return path
 
 
-def prepare(config: dict, out: Path, clear_stop: bool) -> Path:
+def prepare(config: dict, out: Path, clear_stop: bool, preserve_stop: bool = False) -> Path:
     """Refuse unsafe launches, then pin the binary and set aside a stale STOP and report."""
     checkpoints, binary, stop = out / "checkpoints", out / "bin" / "hexweave.exe", out / "STOP"
+    if preserve_stop and stop.exists():
+        raise SystemExit("recovery mode will not clear an existing STOP")
     if not config["resume"]:
         for held in (checkpoints, out / "best"):
             if held.exists() and any(held.iterdir()):
@@ -90,15 +92,20 @@ def prepare(config: dict, out: Path, clear_stop: bool) -> Path:
             os.replace(partial, binary)
         finally:
             partial.unlink(missing_ok=True)
-    if stop.exists():
+    if stop.exists() and not preserve_stop:
         archive(stop, "archived")
     if (out / "report.json").exists():
         archive(out / "report.json", "previous")
     return binary
 
 
-def request_stop(out: Path, reason: str) -> float:
-    (out / "STOP").write_text(f"owner: {reason}\n", encoding="utf-8")
+def request_stop(out: Path, reason: str, token: str | None = None) -> float:
+    text = f"owner: {reason}\n" + (f"attempt: {token}\n" if token else "")
+    try:
+        with (out / "STOP").open("x", encoding="utf-8") as file:
+            file.write(text)
+    except FileExistsError:
+        pass
     return time.monotonic()
 
 
@@ -107,7 +114,7 @@ def followed_by(earlier: str | None, later: str) -> str:
     return later if earlier is None else f"{earlier} then {later}"
 
 
-def supervise(process, out: Path, wall_seconds: int) -> tuple[str | None, int]:
+def supervise(process, out: Path, wall_seconds: int, token: str | None = None) -> tuple[str | None, int]:
     """Sample each second; a sustained floor breach, overrun or Ctrl+C requests STOP, then kills after grace."""
     started, requested, reason, peak, breaches = time.monotonic(), None, None, 0, 0
     try:
@@ -117,14 +124,14 @@ def supervise(process, out: Path, wall_seconds: int) -> tuple[str | None, int]:
             overrun = time.monotonic() - started > wall_seconds + BACKSTOP_SECONDS
             if requested is None and (breaches >= FLOOR_SAMPLES or overrun):
                 reason = "owner_overrun_stop" if overrun else "owner_memory_stop"
-                requested = request_stop(out, reason)
+                requested = request_stop(out, reason, token)
             if requested is not None and time.monotonic() - requested > GRACE_SECONDS:
                 process.kill()
                 return followed_by(reason, "owner_killed_after_grace"), peak
             time.sleep(1)
     except KeyboardInterrupt:
         reason = followed_by(reason, "owner_interrupted")
-        request_stop(out, "owner_interrupted")
+        request_stop(out, "owner_interrupted", token)
         try:
             process.wait(timeout=GRACE_SECONDS)
             return reason, peak
@@ -137,8 +144,8 @@ def supervise(process, out: Path, wall_seconds: int) -> tuple[str | None, int]:
 def stop_reason(out: Path) -> str | None:
     """Reason in an owner-written STOP (this launch's; prepare archived older ones), if present."""
     try:
-        text = (out / "STOP").read_text(encoding="utf-8").strip()
-    except OSError:
+        text = (out / "STOP").read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError):
         return None
     return text.removeprefix("owner: ") if text.startswith("owner:") else None
 
@@ -186,12 +193,14 @@ def finish(out: Path, run_stamp: str, process, reason: str | None, peak: int, st
         "ended_utc": stamp(), "report": report})
 
 
-def own(config_path: Path, config: dict, out: Path, binary: Path, host: dict) -> int:
-    run_stamp = stamp()
+def own(config_path: Path, config: dict, out: Path, binary: Path, host: dict,
+        attempt: str | None = None) -> int:
+    run_stamp = attempt or stamp()
     write(out / f"owner-start-{run_stamp}.json", {
         "schema": 1, "config": str(config_path), "config_sha256": digest(config_path),
         "binary_sha256": digest(binary), "git": git_state(), "host": host,
-        "child_commit_limit_bytes": CHILD_LIMIT, "floor_bytes": FLOOR, "started_utc": run_stamp})
+        "child_commit_limit_bytes": CHILD_LIMIT, "floor_bytes": FLOOR, "started_utc": stamp(),
+        **({"memory_stop_token": attempt} if attempt else {})})
     environment = os.environ.copy()
     environment.update({name: "1" for name in ("RAYON_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")})
     environment["CUDA_VISIBLE_DEVICES"] = ""
@@ -207,7 +216,7 @@ def own(config_path: Path, config: dict, out: Path, binary: Path, host: dict) ->
             job.assign(process)
             resume_suspended(process)
             try:
-                reason, peak = supervise(process, out, int(config["wall_seconds"]))
+                reason, peak = supervise(process, out, int(config["wall_seconds"]), attempt)
             except Exception as error:
                 reason = followed_by(stop_reason(out), f"owner_error: {type(error).__name__}")
                 if not settle(process, out, reason):
@@ -227,15 +236,20 @@ def own(config_path: Path, config: dict, out: Path, binary: Path, host: dict) ->
     return 0 if process is not None and process.returncode == 0 else 1
 
 
-def launch(config_path: Path, clear_stop: bool) -> int:
+def launch(config_path: Path, clear_stop: bool, recovery=None) -> int:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     out = run_directory(config)
     host = memory_status()
-    if host["available_physical_bytes"] < START_FLOOR:
+    if recovery is not None:
+        recovery.validate(config)
+    if recovery is None and host["available_physical_bytes"] < START_FLOOR:
         raise SystemExit(f"available {host['available_physical_bytes']} below start floor {START_FLOOR}")
     out.mkdir(parents=True, exist_ok=True)
     held = lock(out)
     try:
+        if recovery is not None:
+            from scripts.core_owner_recovery import run
+            return run(config_path, config, out, clear_stop, recovery)
         return own(config_path, config, out, prepare(config, out, clear_stop), host)
     finally:
         held.unlink()
@@ -245,8 +259,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--clear-stop", action="store_true", help="archive a STOP no owner wrote")
+    parser.add_argument("--resume-on-memory", action="store_true", help="retry clean connected memory stops")
+    parser.add_argument("--max-memory-restarts", type=int, default=3)
+    parser.add_argument("--memory-recovery-wait-seconds", type=int, default=21600)
     arguments = parser.parse_args()
-    return launch(arguments.config.resolve(strict=True), arguments.clear_stop)
+    from scripts.core_owner_recovery import Policy
+    recovery = (Policy(arguments.max_memory_restarts, arguments.memory_recovery_wait_seconds)
+                if arguments.resume_on_memory else None)
+    return launch(arguments.config.resolve(strict=True), arguments.clear_stop, recovery)
 
 
 if __name__ == "__main__":

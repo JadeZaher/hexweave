@@ -1,10 +1,11 @@
 use anyhow::{bail, Context, Result};
+use hexweave::causal::Decoder;
 use hexweave::config::Config;
 use std::path::Path;
 
 mod causal_cli;
 
-const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave causal plan\nhexweave train --config <core-run.json>   (core path: latent Adam, greedy routes, anchor-only; see src/causal/AGENTS.md)";
+const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave causal plan\nhexweave train --config <core-run.json>\nhexweave complete --config <core-run.json> --checkpoint <aNNNNNNNNNNNN> --prompt <text> [--max-new-bytes 160] [--top-p P [--temperature 1.0] [--seed 0]] [--trace-bytes 0..16] [--feedback generated|prompt-only] [--quantize-audit]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -17,10 +18,101 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Some("train") => train(&args[1..])?,
+        Some("complete") => complete(&args[1..])?,
         Some(command) => bail!("unknown command {command:?}\n{USAGE}"),
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn complete(args: &[String]) -> Result<serde_json::Value> {
+    let (mut config, mut checkpoint, mut prompt, mut limit) = (None, None, None, None);
+    let (mut trace, mut feedback) = (None, None);
+    let (mut top_p, mut temperature, mut seed) = (None, None, None);
+    let mut quantize = false;
+    let mut at = 0;
+    while at < args.len() {
+        if args[at] == "--quantize-audit" {
+            if quantize {
+                bail!("duplicate quantize-audit option");
+            }
+            quantize = true;
+            at += 1;
+            continue;
+        }
+        let pair = args
+            .get(at..at + 2)
+            .context("each complete option needs a value")?;
+        at += 2;
+        match pair[0].as_str() {
+            "--config" if config.is_none() => config = Some(pair[1].as_str()),
+            "--checkpoint" if checkpoint.is_none() => checkpoint = Some(pair[1].as_str()),
+            "--prompt" if prompt.is_none() => prompt = Some(pair[1].as_str()),
+            "--max-new-bytes" if limit.is_none() => {
+                limit = Some(
+                    pair[1]
+                        .parse::<usize>()
+                        .context("max-new-bytes must be a positive integer")?,
+                )
+            }
+            "--trace-bytes" if trace.is_none() => {
+                trace = Some(
+                    pair[1]
+                        .parse::<usize>()
+                        .context("trace-bytes must be an integer in 0..=16")?,
+                );
+            }
+            "--feedback" if feedback.is_none() => {
+                feedback = Some(match pair[1].as_str() {
+                    "generated" => true,
+                    "prompt-only" => false,
+                    _ => bail!("feedback must be generated or prompt-only"),
+                });
+            }
+            "--top-p" if top_p.is_none() => {
+                top_p = Some(pair[1].parse::<f64>().context("top-p must be a number")?)
+            }
+            "--temperature" if temperature.is_none() => {
+                temperature = Some(
+                    pair[1]
+                        .parse::<f64>()
+                        .context("temperature must be a number")?,
+                )
+            }
+            "--seed" if seed.is_none() => {
+                seed = Some(
+                    pair[1]
+                        .parse::<u64>()
+                        .context("seed must be an unsigned integer")?,
+                )
+            }
+            flag => bail!("unknown or duplicate complete option {flag:?}"),
+        }
+    }
+    let (Some(config), Some(checkpoint), Some(prompt)) = (config, checkpoint, prompt) else {
+        bail!("expected complete --config <path> --checkpoint <name> --prompt <text>");
+    };
+    let decoder = match top_p {
+        Some(top_p) => Decoder::Nucleus {
+            temperature: temperature.unwrap_or(1.0),
+            top_p,
+            seed: seed.unwrap_or(0),
+        },
+        None if temperature.is_some() || seed.is_some() => {
+            bail!("temperature and seed apply only with --top-p")
+        }
+        None => Decoder::Greedy,
+    };
+    hexweave::causal::complete_audit(
+        Path::new(config),
+        checkpoint,
+        prompt,
+        limit.unwrap_or(160),
+        trace.unwrap_or(0),
+        feedback.unwrap_or(true),
+        quantize,
+        decoder,
+    )
 }
 
 fn train(args: &[String]) -> Result<serde_json::Value> {

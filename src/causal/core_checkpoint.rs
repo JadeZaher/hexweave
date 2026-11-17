@@ -1,7 +1,6 @@
 //! Core-path checkpoints: resident model plus latent state, hash-manifested and fsynced; see AGENTS.md §core.
 
 use super::checkpoint_state::StateRecord;
-use super::core_codec::{decode_latents, decode_tiles, encode_latents, encode_tiles};
 use super::geometry::Geometry;
 use super::resident::ResidentStore;
 use super::state::State;
@@ -101,15 +100,12 @@ pub(super) fn save(
         retry(|| std::fs::remove_dir_all(&partial))?;
     }
     std::fs::create_dir(&partial)?;
-    let (latents, calls) = tuning::export();
     let mut payloads = vec![
         (
             "state.json",
             serde_json::to_vec(&StateRecord::capture(state)?)?,
         ),
         ("shared.bin", encode_shared(&state.shared)?),
-        ("tiles.bin", encode_tiles(store)?),
-        ("latent.bin", encode_latents(&latents)?),
     ];
     if tuning::current().fit_predictor {
         payloads.push(("predictor.bin", encode_predictor(&state.predictor)?));
@@ -119,6 +115,12 @@ pub(super) fn save(
         write_synced(&partial.join(file), bytes)?;
         files.insert((*file).to_string(), digest(bytes));
     }
+    files.insert(
+        "tiles.bin".into(),
+        super::core_stream::write_tiles(&partial.join("tiles.bin"), store)?,
+    );
+    let (hash, calls) = super::core_stream::write_latents(&partial.join("latent.bin"))?;
+    files.insert("latent.bin".into(), hash);
     let manifest = Manifest {
         schema: 1,
         protocol: PROTOCOL.into(),
@@ -251,8 +253,9 @@ pub(super) fn load(
         state.global_opportunity == manifest.anchors,
         "checkpoint anchor count mismatch"
     );
-    let store = decode_tiles(&read("tiles.bin")?, geometry, versions)?;
-    tuning::import(decode_latents(&read("latent.bin")?)?, manifest.calls);
+    let (store, latents) =
+        super::core_stream_read::load(path, &manifest.files, geometry, versions)?;
+    tuning::import(latents, manifest.calls);
     Ok((state, store))
 }
 

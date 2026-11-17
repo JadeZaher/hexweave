@@ -5,3 +5,16 @@ __pycache__/
 .env
 .env.*
 !.env.example
+/.omc/handoffs/
+/.omc/logs/
+/.omc/state/
+/paper/*.aux
+/paper/*.bbl
+/paper/*.blg
+/paper/*.log
+/paper/*.out
+/paper/*.toc
+/paper/*.fls
+/paper/*.fdb_latexmk
+/paper/*.synctex.gz
+/.omc/research/

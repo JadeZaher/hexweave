@@ -32,7 +32,8 @@ flowchart TD
 
 The diagram is a learning loop, not a claim that all blocks train concurrently.
 All seven tiny tiles are resident in the FP32 fixture, the archived pulse
-protocol and the core training path. Sparse execution is not sparse residency.
+protocol and the v2 core reference. The connected core path instead bounds
+decoded tile and optimizer residency; see [the connected design](../src/causal/CONNECTED.md).
 The archived [disk-local text protocol](../archive/docs/TEXT-PULSE.md) loaded one
 tile at a time, with shared state retained and OS file-cache behavior explicitly
 outside its contract.

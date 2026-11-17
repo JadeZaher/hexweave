@@ -32,6 +32,56 @@ and an owner error recovers this launch's owner-written STOP reason first, e.g.
 written on every exit path the owner itself survives (not console close or
 reboot, which leave `OWNER.lock` for manual removal).
 
+### Optional recovery after a memory stop
+
+`--resume-on-memory` enables bounded recovery for connected runs only. The
+default command still launches one child. Recovery retains `OWNER.lock` across
+attempts and waits, keeps the same pinned executable, and creates an immutable
+`owner-attempt-<session>-<attempt>.json` config for each child. Subsequent attempts
+set `resume: true`; model options and the total anchor target stay fixed. Each
+attempt's elapsed wall time is subtracted from the caller's `wall_seconds`, with
+the next child receiving the rounded-down remainder. Recovery waits have a
+separate cumulative budget and do not replenish training time.
+
+Only an exit-zero, exact `owner_memory_stop` receipt with a matching `stopped`
+report and complete final checkpoint permits recovery. An initial explicit
+resume under this mode requires the same evidence. Admission checks the pinned
+binary and source-config hashes, checkpoint identity and counters, and every
+payload hash. It repeats these checks after waiting, before clearing the owned
+STOP. A changed, missing or corrupt checkpoint ends recovery; it is not a request
+to fall back to an older checkpoint. Recovery does not migrate checkpoints or
+replace a missing pinned binary.
+
+Memory must remain at or above the existing 768 MiB start floor for 30 consecutive
+one-second samples. `--max-memory-restarts` defaults to three and accepts zero
+through three; `--memory-recovery-wait-seconds` defaults to 21,600 and can reduce
+the six-hour cumulative wait bound. Recovery ends on these limits, an exhausted
+training budget, a completed target, an error, a forced exit, or an operator
+cancellation. Ctrl+C during a wait exits with status 130. Write or replace
+`out/STOP` to cancel a wait; removing or changing its owned marker also cancels.
+STOP requests use exclusive creation and never overwrite an existing marker.
+Recovery checks the exact owned marker and its file identity when archiving it;
+a raced operator replacement is preserved and cancels the attempt. A late
+admission failure leaves the marker intact for another bounded wait.
+
+Prior STOP files, reports, and per-attempt start/end receipts are retained.
+`owner-recovery-<session>.json` publishes the current phase, stable-memory sample
+count, wait usage, attempt/restart counts and remaining training budget. These
+files are run receipts under `work/`, not model configuration fields. The helper
+modules are `core_owner_recovery.py` and `core_owner_checkpoint.py`; their mocked
+state-machine contracts live in `tests/test_core_owner_recovery.py`.
+Connected precision defaults to `ternary` and the `causal-connected-v5`
+protocol ([v5 contract](../src/causal/CONNECTED.md#label-conditioned-credit-predictor-and-gain-scaled-decay-v5)).
+`connected.precision: "fp32"` selects `causal-connected-fp32-v5`.
+Recovery admits the v1 through v5 generations of the configured precision (a
+generation stays admitted while runs of it exist); the report, newest manifest
+and older manifests must name the same protocol, so a run mixing generations is
+refused. The run's pinned binary enforces that protocol when it resumes.
+Recovery requires the config, report, manifest and saved common-state precision
+to agree; unknown precision values and changes of precision across attempts are
+rejected. Missing precision in an older ternary checkpoint retains its original
+meaning. The owner does not quantize, migrate, or reinterpret its payloads.
+
 ## Corpus preparation
 
 `prepare_corpus.py` turns a TinyStories-format file (stories separated by

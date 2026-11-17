@@ -1,8 +1,11 @@
+//! Single-query attention over immutable prefix rows; see STUDY.md.
+
 use super::norm::{self, Rms};
 use super::tile::Tile;
 use super::tile_gradients::{TileGradients, K, O, Q, V};
 use anyhow::Result;
 
+/// Replay scratch: per-head vectors and probabilities, without per-token K/V projections.
 pub(super) struct Cache {
     pub normalized: Rms,
     pub query: Vec<f32>,
@@ -13,6 +16,7 @@ pub(super) struct Cache {
     pub output: Vec<f32>,
 }
 
+/// Attend from one evolving state to the shared byte-plus-position prefix.
 pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cache> {
     let (d, h) = (tile.geometry.width, tile.geometry.heads);
     let (length, k, scale) = (memory.len() / d, d / h, (d as f32).sqrt().recip());
@@ -25,6 +29,7 @@ pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cach
     let mut attended = vec![0.0; d];
     for head in 0..h {
         let start = head * k;
+        // Factor q_h dot (K_h row) into row dot (K_h^T q_h), then scan the prefix.
         let mut score_vector = tile.transpose_rows(K, start, k, &query[start..start + k])?;
         norm::scale_in_place(&mut score_vector, score_scale)?;
         let scores = &mut probabilities[head * length..(head + 1) * length];
@@ -33,6 +38,7 @@ pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cach
         }
         norm::softmax(scores)?;
         let summary = &mut summaries[head * d..(head + 1) * d];
+        // Linearity lets V_h project one weighted summary instead of every prefix row.
         weighted_sum(summary, memory, scores);
         norm::finite(summary)?;
         let mut value = tile.project_rows(V, start, k, summary)?;
@@ -52,6 +58,7 @@ pub(super) fn forward(tile: &Tile, input: &[f32], memory: &[f32]) -> Result<Cach
     })
 }
 
+/// Propagate conditional adjoints, optionally accumulating prefix or parameter credit.
 pub(super) fn backward(
     tile: &Tile,
     memory: &[f32],
