@@ -57,7 +57,7 @@ impl Counters {
         id: usize,
         action: Option<usize>,
         depth: usize,
-        seen: &mut u8,
+        seen: &mut u32,
     ) -> Result<()> {
         ensure!(id < TILES && depth < 4, "invalid visit metadata");
         count(&mut self.visits, 1)?;

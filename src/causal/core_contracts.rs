@@ -134,9 +134,11 @@ fn run_identity_is_pinned_and_ignores_schedule_fields() -> Result<()> {
         identity_of(&serde_json::to_vec(&config)?)
     };
     let reference = identity("schema", json!(1))?;
-    assert_eq!(
-        reference, "3deb9cffc7dc59b300050f6834d1c28bb0f309b9163d8ff31b5b5038a81bb5ac",
-        "identity formula changed: existing checkpoints will not resume"
+    // The golden is the seven-tile identity; another tile count must not share it.
+    let golden = "3deb9cffc7dc59b300050f6834d1c28bb0f309b9163d8ff31b5b5038a81bb5ac";
+    assert!(
+        (reference == golden) != cfg!(feature = "tiles19"),
+        "identity formula changed (old checkpoints will not resume) or 19 tiles reused it"
     );
     for (field, value, moves) in [
         ("seed", json!(8), true),

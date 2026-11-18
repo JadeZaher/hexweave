@@ -12,6 +12,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 sha2 = "=0.10.9"
 
+[features]
+# Radius-2 hex of 19 tiles instead of the default radius-1 hex of 7; see src/causal/CONNECTED.md.
+tiles19 = []
+
 [profile.release]
 debug = 1
 

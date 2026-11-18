@@ -1,11 +1,40 @@
+use crate::topology::Mesh;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 pub(super) const VOCAB: usize = 256;
-pub(super) const TILES: usize = 7;
+/// Hex radius of the tile mesh: 1 (7 tiles) by default, 2 (19 tiles) with `tiles19`.
+#[cfg(not(feature = "tiles19"))]
+pub(super) const RADIUS: usize = 1;
+#[cfg(feature = "tiles19")]
+pub(super) const RADIUS: usize = 2;
+/// Tiles in a radius-`RADIUS` hex; the id layout is in CONNECTED.md §Tile count.
+pub(super) const TILES: usize = 3 * RADIUS * (RADIUS + 1) + 1;
+/// The centre tile `(q, r) = (0, 0)`: the middle id of the point-symmetric q-then-r order.
+pub(super) const START_TILE: usize = TILES / 2;
 pub(super) const VISITS: usize = 4;
 pub(super) const MATRIX_COUNT: usize = 11;
 pub(super) const EVIDENCE_RULE: &str = "threshold-one-canonical-zero-v1";
+
+/// The fixed routing mesh in stable q-then-r axial order, built once per process.
+pub(super) fn mesh() -> &'static Mesh {
+    static MESH: OnceLock<Mesh> = OnceLock::new();
+    MESH.get_or_init(|| Mesh::new(RADIUS).expect("compile-time hex radius is valid"))
+}
+
+/// Tile counts some build of this binary has: the default 7 and the `tiles19` 19.
+pub(super) const BUILT_TILE_COUNTS: [usize; 2] = [7, 19];
+
+/// Describes `found` tiles against this build and names the build that has them; None if equal.
+pub(super) fn tile_mismatch(found: usize) -> Option<String> {
+    let build = match found {
+        19 => "build with `cargo build --release --features tiles19`",
+        7 => "use the default build (`cargo build --release`, no tiles19 feature)",
+        _ => "only 7- and 19-tile builds exist",
+    };
+    (found != TILES).then(|| format!("{found} tiles but this binary is built for {TILES}; {build}"))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,9 +104,10 @@ impl Geometry {
         3 * self.width + 2
     }
 
+    /// Legal route actions of tile `id`: one per mesh neighbour plus halt.
     pub fn routes(self, id: usize) -> Result<usize> {
         ensure!(id < TILES, "invalid causal tile ID");
-        Ok(if id == 3 { 7 } else { 4 })
+        Ok(mesh().neighbors(id)?.len() + 1)
     }
 
     pub fn shapes(self, id: usize) -> Result<[(usize, usize); MATRIX_COUNT]> {
@@ -112,9 +142,16 @@ impl Geometry {
             (1..=self.context).contains(&length),
             "invalid ledger prefix length"
         );
-        let (d, m, h, l, r) = (self.width, self.ffn, self.heads, length, 7);
+        // The centre tile has the most route actions (six neighbours plus halt) at any radius.
+        let (d, m, h, l, r) = (
+            self.width,
+            self.ffn,
+            self.heads,
+            length,
+            self.routes(START_TILE)?,
+        );
         let shared = VOCAB * d + d * self.features();
-        let tile = self.tile_coefficients(3)?;
+        let tile = self.tile_coefficients(START_TILE)?;
         let mut total = shared;
         for id in 0..TILES {
             total += self.tile_coefficients(id)?;
@@ -166,5 +203,51 @@ impl Geometry {
             tile_io_reserve_bytes: 2 * (tile / 4 + 2 * tile) + 4096,
             physical_admission: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mesh, Geometry, RADIUS, START_TILE, TILES};
+
+    #[test]
+    fn hex_mesh_is_symmetric_connected_and_centred() -> anyhow::Result<()> {
+        let mesh = mesh();
+        assert_eq!(mesh.len(), TILES);
+        let centre = mesh.coordinates()[START_TILE];
+        assert_eq!((centre.q, centre.r), (0, 0));
+        let mut reached = [false; TILES];
+        let mut frontier = vec![START_TILE];
+        reached[START_TILE] = true;
+        while let Some(id) = frontier.pop() {
+            for next in mesh.neighbors(id)? {
+                assert!(
+                    mesh.neighbors(next)?.contains(&id),
+                    "asymmetric {id}-{next}"
+                );
+                if !std::mem::replace(&mut reached[next], true) {
+                    frontier.push(next);
+                }
+            }
+        }
+        assert!(reached.iter().all(|&tile| tile), "unreachable tile");
+        for (id, point) in mesh.coordinates().iter().enumerate() {
+            // Interior tiles have six neighbours; outer-ring corners three, edges four.
+            let ring = [point.q, point.r, -point.q - point.r].map(i32::abs);
+            let corner = ring.iter().filter(|&&value| value == RADIUS as i32).count() == 2;
+            let expected = match ring.into_iter().max() {
+                Some(distance) if distance < RADIUS as i32 => 6,
+                _ if corner => 3,
+                _ => 4,
+            };
+            assert_eq!(mesh.neighbors(id)?.len(), expected, "tile {id}");
+            assert_eq!(Geometry::candidate().routes(id)?, expected + 1);
+        }
+        if cfg!(feature = "tiles19") {
+            assert_eq!((TILES, START_TILE), (19, 9));
+        } else {
+            assert_eq!((TILES, START_TILE), (7, 3));
+        }
+        Ok(())
     }
 }

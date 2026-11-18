@@ -18,16 +18,16 @@ pub(super) fn dial(distance: f64, bar: f64) -> Result<f64> {
     Ok(lambert_w(input)?.min(MAX_PLASTICITY))
 }
 
-/// One visited anchor under the law: drift is the distance, it sets the dial, the reference chases;
-/// before the signal's warm-up the dial holds at 1 (full rate).
-pub(super) fn visit(entry: &mut TileRestart, bar: f64) -> Result<()> {
+/// One settle under the law over `anchors` visited anchors (1, or a wave's count): drift is the
+/// distance, it sets the dial, the reference chases once; before warm-up the dial holds at 1.
+pub(super) fn visit(entry: &mut TileRestart, bar: f64, anchors: u64) -> Result<()> {
     entry.drift = entry.signal.distance();
     entry.plasticity = if entry.signal.is_warm() {
         dial(entry.drift, bar)?
     } else {
         1.0
     };
-    entry.plasticity_sum += entry.plasticity;
+    entry.plasticity_sum += entry.plasticity * anchors as f64;
     entry.signal.chase((entry.plasticity * BETA).min(1.0));
     Ok(())
 }

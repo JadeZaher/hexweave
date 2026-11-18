@@ -61,7 +61,7 @@ pub(super) fn identity<S: TileStore>(state: &State, store: &mut S) -> Result<Str
             writer.write_all(&value.to_bits().to_le_bytes())?;
         }
     }
-    for id in 0..7 {
+    for id in 0..super::geometry::TILES {
         store.read(id, |tile| {
             super::execution::checked_tile(tile, state.geometry, id, state.tile_versions[id])?;
             for packed in tile.packed() {

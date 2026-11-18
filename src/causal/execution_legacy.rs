@@ -10,7 +10,6 @@ use super::state::{count, Boundary, State};
 use super::store_api::TileStore;
 use super::telemetry::{self, Phase};
 use super::tile_gradients::TileGradients;
-use crate::topology::Mesh;
 use anyhow::{ensure, Context, Result};
 
 /// STOP is observed before entry; an entered opportunity completes or poisons.
@@ -140,8 +139,8 @@ fn local<S: TileStore>(
         let update = state.predictor.train_joint(&pairs)?;
         state.counters.predictor(update, true)?;
     }
-    let mesh = Mesh::new(1)?;
-    let (mut id, mut input, mut seen) = (START_TILE, prefix.initial(state.geometry).to_vec(), 0u8);
+    let mesh = super::geometry::mesh();
+    let (mut id, mut input, mut seen) = (START_TILE, prefix.initial(state.geometry).to_vec(), 0u32);
     for depth in 0..VISITS {
         prune(state)?;
         let history = state.history.mean(state.geometry)?;
@@ -179,7 +178,7 @@ fn local<S: TileStore>(
             .counters
             .visit(state.geometry, id, action, depth, &mut seen)?;
         input = output;
-        match destination(&mesh, id, action)? {
+        match destination(mesh, id, action)? {
             Some(next) => id = next,
             None => break,
         }
@@ -188,7 +187,7 @@ fn local<S: TileStore>(
 }
 
 fn record_trace(state: &mut State, trace: &Trace) -> Result<()> {
-    let mut seen = 0u8;
+    let mut seen = 0u32;
     for frame in &trace.frames {
         state.counters.visit(
             state.geometry,

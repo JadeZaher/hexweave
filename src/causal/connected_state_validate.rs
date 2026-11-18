@@ -85,6 +85,7 @@ impl State {
             "nonfinite predictor metrics"
         );
         super::super::connected_restart::validate(self)?;
+        super::super::connected_wave::validate_state(self)?;
         self.validate_bias()?;
         self.validate_shared()
     }

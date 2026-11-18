@@ -21,6 +21,9 @@ mod contracts;
 mod fixture;
 #[path = "connected_completion_io.rs"]
 mod io;
+#[cfg(all(test, feature = "tiles19"))]
+#[path = "connected_tiles19_contracts.rs"]
+mod tiles19;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -115,6 +118,8 @@ fn infer(
     decode: super::connected_decode::Options,
 ) -> Result<Value> {
     let source = io::checkpoint_path(&config.out, checkpoint)?;
+    // Another build's checkpoint lacks this build's tile files; name the build instead.
+    connected_checkpoint::check_tile_count(&source)?;
     // Read a possibly live source once; the hash then covers exactly the bytes loaded.
     let snapshot = scratch.join("checkpoints").join(checkpoint);
     let hash = io::snapshot(&source, &snapshot, geometry)?;

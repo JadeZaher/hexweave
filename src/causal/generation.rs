@@ -24,7 +24,7 @@ pub(super) enum Terminal {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Routes {
-    pub visits: [u64; 7],
+    pub visits: [u64; super::geometry::TILES],
     pub route_calls: u64,
     pub halts: u64,
     pub forced_exits: u64,

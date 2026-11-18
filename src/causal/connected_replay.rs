@@ -134,13 +134,15 @@ pub(super) fn replay_salted<S: TrainingSource>(
     let cursor = source.replay_cursor(position)?;
     let prefix = state.shared.prefix(&source.pending_prefix(&cursor)?)?;
     let random = tuning::hash(state.seed, &[state.anchors, position, salt]);
+    let key = [state.anchors, position, salt];
+    let random = super::connected_route::random(&state.options, state.seed, &key, random);
     // Records from anchor `position` on carry its own or later labels (CONNECTED.md §Replay).
     let trace = connected_anchor::forward(
         store,
         state.geometry,
         &prefix,
         state.options.visits,
-        Some(random),
+        random,
         |tile, input| {
             let retrieved =
                 state

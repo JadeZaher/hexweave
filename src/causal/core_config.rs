@@ -69,6 +69,9 @@ pub(super) struct Config {
     pub connected: Option<super::connected_config::Options>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connected_eval: Option<super::connected_eval_config::Options>,
+    /// Compiled tile count the run needs; absent means 7. Checked, never run identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiles: Option<usize>,
 }
 
 fn default_batch() -> u32 {
@@ -93,6 +96,9 @@ fn is_default_eval_spans(value: &usize) -> bool {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        if let Some(mismatch) = super::geometry::tile_mismatch(self.tiles.unwrap_or(7)) {
+            anyhow::bail!("run config needs {mismatch}");
+        }
         super::core_schedule::validate(self)?;
         if let Some(options) = self.connected {
             options.validate_run(self)?;
@@ -173,6 +179,10 @@ impl Config {
                             "numerics": self.knobs() });
         if let Some(options) = self.connected {
             value["connected"] = serde_json::to_value(options)?;
+        }
+        // Seven-tile identities predate this key, so only other tile counts record it.
+        if super::geometry::TILES != 7 {
+            value["tiles"] = json!(super::geometry::TILES);
         }
         Ok(digest(&serde_json::to_vec(&value)?))
     }

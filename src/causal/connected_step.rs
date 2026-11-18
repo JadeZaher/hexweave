@@ -55,25 +55,8 @@ fn complete<S: TrainingSource>(
     rate: f64,
     threaded: bool,
 ) -> Result<f32> {
-    let bytes = source.pending_prefix(&state.cursor)?;
-    let prefix = state.shared.prefix(&bytes)?;
     let revisions = std::array::from_fn(|id| store.slots[id].meta.revision);
-    let random = tuning::hash(state.seed, &[state.anchors, 0x414e4348]);
-    let trace = connected_anchor::forward(
-        store,
-        state.geometry,
-        &prefix,
-        options.visits,
-        Some(random),
-        |tile, input| {
-            state.counters.memory_reads += 1;
-            let retrieved =
-                state
-                    .memory
-                    .query(input, tile, state.epoch, &revisions, state.anchors)?;
-            Ok(options.history_input(retrieved))
-        },
-    )?;
+    let (bytes, prefix, trace) = forward(state, store, source, options, &revisions)?;
     // The target is unavailable to every route computation above this boundary.
     let target = source.anchor_target(&state.cursor)?;
     let credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, target.byte)?;
@@ -82,31 +65,9 @@ fn complete<S: TrainingSource>(
     super::connected_replay::run(state, store, source, &mut replayed)?;
     // The label feature under the E that produced these corrections (CONNECTED.md §v5).
     let observed_target = state.shared.target_feature(target.byte)?;
-    // The readout input is normalized, so the scale bound applies to each raw visit output.
-    let (visit_mean, visit_max) = trace.visit_rms();
-    ensure!(
-        visit_max <= 1e3,
-        "connected visit output exceeded its bound"
-    );
+    let tally = Tally::of(&trace, &credit)?;
     super::connected_lane_apply::update_routes(state, store, &trace, credit.loss, options, rate)?;
-    let embedding = connected_update::apply_embedding(
-        &mut state.shared,
-        &mut state.shared_latent,
-        &credit.embedding,
-        rate,
-        &options,
-    )?;
-    state.counters.embedding_transitions += embedding.transitions as u64;
-    state.counters.change_sum += restart::relative(&embedding);
-    if let Some(gradient) = &credit.bias_gradient {
-        connected_update::apply_bias(
-            &mut state.shared,
-            &mut state.bias_latent,
-            gradient,
-            rate,
-            &options,
-        )?;
-    }
+    step_shared(state, &credit, rate, &options)?;
     observe(
         state,
         &trace,
@@ -134,15 +95,107 @@ fn complete<S: TrainingSource>(
         let position = state.cursor.supervised_targets;
         state.replay.admit(position, credit.loss, replay.capacity);
     }
+    advance(state, source, &tally)?;
+    Ok(credit.loss)
+}
+
+/// One anchor's target-free forward pass under tile `revisions`: prefix bytes, prefix, trace.
+pub(super) fn forward<S: TrainingSource>(
+    state: &mut State,
+    store: &mut Store,
+    source: &S,
+    options: Options,
+    revisions: &[u64; TILES],
+) -> Result<(Vec<u8>, Prefix, Trace)> {
+    let bytes = source.pending_prefix(&state.cursor)?;
+    let prefix = state.shared.prefix(&bytes)?;
+    let random = tuning::hash(state.seed, &[state.anchors, 0x414e4348]);
+    let random = super::connected_route::random(&options, state.seed, &[state.anchors], random);
+    let trace = connected_anchor::forward(
+        store,
+        state.geometry,
+        &prefix,
+        options.visits,
+        random,
+        |tile, input| {
+            state.counters.memory_reads += 1;
+            let retrieved =
+                state
+                    .memory
+                    .query(input, tile, state.epoch, revisions, state.anchors)?;
+            Ok(options.history_input(retrieved))
+        },
+    )?;
+    Ok((bytes, prefix, trace))
+}
+
+/// Per-anchor scalars recorded once the anchor advances.
+pub(super) struct Tally {
+    pub loss: f32,
+    output_rms: f32,
+    /// Mean and maximum raw visit RMS.
+    visit: (f64, f64),
+    knot_overflow: f64,
+}
+
+impl Tally {
+    /// The anchor's scalars; the readout input is normalized, so each raw visit output is bounded.
+    pub fn of(trace: &Trace, credit: &Credit) -> Result<Self> {
+        let visit = trace.visit_rms();
+        ensure!(visit.1 <= 1e3, "connected visit output exceeded its bound");
+        Ok(Self {
+            loss: credit.loss,
+            output_rms: credit.output_rms,
+            visit,
+            knot_overflow: trace.knot_overflow(),
+        })
+    }
+}
+
+/// Steps E and the readout bias on one anchor's credit; both Adam clocks track `anchors`.
+pub(super) fn step_shared(
+    state: &mut State,
+    credit: &Credit,
+    rate: f64,
+    options: &Options,
+) -> Result<()> {
+    let embedding = connected_update::apply_embedding(
+        &mut state.shared,
+        &mut state.shared_latent,
+        &credit.embedding,
+        rate,
+        options,
+    )?;
+    state.counters.embedding_transitions += embedding.transitions as u64;
+    state.counters.change_sum += restart::relative(&embedding);
+    if let Some(gradient) = &credit.bias_gradient {
+        connected_update::apply_bias(
+            &mut state.shared,
+            &mut state.bias_latent,
+            gradient,
+            rate,
+            options,
+        )?;
+    }
+    Ok(())
+}
+
+/// Advances the cursor and anchor count and folds the anchor into the counters and baseline.
+pub(super) fn advance<S: TrainingSource>(
+    state: &mut State,
+    source: &S,
+    tally: &Tally,
+) -> Result<()> {
     source.advance_anchor(&mut state.cursor)?;
     state.anchors += 1;
-    state.counters.loss_sum += f64::from(credit.loss);
-    state.counters.readout_rms_sum += f64::from(credit.output_rms);
-    state.counters.visit_rms_sum += visit_mean;
-    state.counters.visit_rms_max = state.counters.visit_rms_max.max(visit_max);
-    state.counters.knot_overflow_sum += trace.knot_overflow();
-    state.baseline = 0.9 * state.baseline + 0.1 * credit.loss;
-    Ok(credit.loss)
+    let counters = &mut state.counters;
+    counters.loss_sum += f64::from(tally.loss);
+    counters.readout_rms_sum += f64::from(tally.output_rms);
+    counters.visit_rms_sum += tally.visit.0;
+    counters.visit_rms_max = counters.visit_rms_max.max(tally.visit.1);
+    counters.knot_overflow_sum += tally.knot_overflow;
+    state.baseline = 0.9 * state.baseline + 0.1 * tally.loss;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -205,7 +258,7 @@ fn apply_tile_credit(
 }
 
 /// Fits every frame's observed correction, conditioned on the anchor's label feature `target`.
-fn observe(
+pub(super) fn observe(
     state: &mut State,
     trace: &Trace,
     credit: &Credit,

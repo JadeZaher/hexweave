@@ -72,6 +72,7 @@ pub(super) fn run(config: &Config) -> Result<Value> {
         "from_scratch": !config.resume, "initial_anchors": initial_anchors, "readout_prior": READOUT_PRIOR,
         "memory_records": state.memory.records.len(), "predictor_fits": state.predictor.fits,
     });
+    log::add_waves(&mut report, &state, &Default::default());
     if options.replay.is_some() {
         report["replay"] = state.replay.report();
     }
@@ -110,18 +111,18 @@ fn drive(
         if started.elapsed() >= Duration::from_secs(config.wall_seconds) {
             break "deadline";
         }
-        let at = Instant::now();
-        super::connected_step::step(state, store, corpus, options, config.rate, true)?;
+        let (at, before) = (Instant::now(), state.anchors);
+        super::connected_wave::step(state, store, corpus, options, config.rate, true)?;
         *training_seconds += at.elapsed().as_secs_f64();
         if state.anchors.is_multiple_of(config.checkpoint_every) {
             checkpoint(config, state, store, identity)?;
         }
         let eval = if state.anchors.is_multiple_of(config.eval_every) {
             Some(evaluate(config, state, store, corpus, log, false)?)
-        } else if super::connected_eval::retention_due(
-            state.anchors,
-            config.connected_eval.unwrap_or_default(),
-        ) {
+        } else if (before + 1..=state.anchors).any(|anchors| {
+            // A wave may pass a retention point; it is then probed at the wave's end.
+            super::connected_eval::retention_due(anchors, config.connected_eval.unwrap_or_default())
+        }) {
             Some(evaluate(config, state, store, corpus, log, true)?)
         } else {
             None

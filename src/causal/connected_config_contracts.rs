@@ -9,7 +9,14 @@ fn base() -> Value {
     json!({"schema":1,"out":"work/core-runs/connected-config-test",
         "data":{"kind":"corpus","root":"work/corpora/test","manifest_sha256":"test","window":32},
         "seed":7,"rate":0.003,"anchors":8,"wall_seconds":60,"checkpoint_every":8,
-        "eval_every":8,"eval_cases":1,"resume":false,"connected":{}})
+        "eval_every":8,"eval_cases":1,"resume":false,"connected":{},"tiles":TILES})
+}
+
+/// A plasticity block whose last tile's dial is `last`, every other tile at 1.
+fn dial(last: f64) -> Value {
+    let mut values = vec![1.0; TILES];
+    values[TILES - 1] = last;
+    json!({"floor":0.1,"plasticity":values})
 }
 
 /// Whether admission refuses `base()` with `connected[key]` set to `value`.
@@ -42,7 +49,9 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("history", json!(true)),
         // Paging controls change no numerics, so they never enter run identity.
         ("write_behind_tiles", json!(8)),
-        ("resident_tiles", json!(7)),
+        ("resident_tiles", json!(TILES)),
+        ("route_training", json!("sampled")),
+        ("route_explore", json!(0.0)),
     ] {
         let mut same = base.clone();
         same["connected"][key] = value;
@@ -88,10 +97,8 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
             "restart",
             json!({"floor":0.1,"threshold":0.5,"adapt":0.25,"clamp":1024.0}),
         ),
-        (
-            "restart",
-            json!({"floor":0.1,"plasticity":[1.0,1.0,1.0,1.0,1.0,1.0,4.0]}),
-        ),
+        ("restart", dial(4.0)),
+        ("route_training", json!("greedy")),
         (
             "restart",
             json!({"floor":0.1,"threshold":0.5,"signal":"tile","law":"lambert"}),
@@ -128,7 +135,8 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("master_rms_cap", json!(9.0)),
         ("write_behind_tiles", json!(65)),
         ("resident_tiles", json!(3)),
-        ("resident_tiles", json!(8)),
+        ("resident_tiles", json!(TILES + 1)),
+        ("route_explore", json!(0.25)),
         ("replay", json!({"capacity":64,"per_anchor":2})),
         ("restart", json!({"floor":-0.1})),
         ("restart", json!({"floor":1.5})),
@@ -147,19 +155,10 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
             "restart",
             json!({"floor":0.1,"threshold":0.5,"clamp":1025.0}),
         ),
-        (
-            "restart",
-            json!({"floor":0.1,"plasticity":[1.0,1.0,1.0,1.0,1.0,1.0,4.5]}),
-        ),
-        (
-            "restart",
-            json!({"floor":0.1,"plasticity":[1.0,1.0,1.0,1.0,1.0,1.0,-0.1]}),
-        ),
+        ("restart", dial(4.5)),
+        ("restart", dial(-0.1)),
         // A zero dial would hand Adam rate 0; so would a Lambert dial at 0 over floor 0.
-        (
-            "restart",
-            json!({"floor":0.1,"plasticity":[1.0,1.0,1.0,1.0,1.0,1.0,0.0]}),
-        ),
+        ("restart", dial(0.0)),
         ("restart", lambert("floor", json!(0.0))),
         // Restart replay needs anchor_exact (the base is lanes).
         ("restart", json!({"floor":0.1,"threshold":0.5,"replay":4})),

@@ -2,7 +2,7 @@
 
 use super::connected_checkpoint_io as io;
 use super::connected_store::{Slot, Store, TileMeta};
-use super::geometry::{Geometry, TILES};
+use super::geometry::{tile_mismatch, Geometry, BUILT_TILE_COUNTS, TILES};
 use super::storage_paths::digest;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -58,32 +58,45 @@ pub(super) fn latest(out: &Path) -> Result<Option<PathBuf>> {
 }
 
 fn manifest(path: &Path) -> Result<Manifest> {
-    Ok(serde_json::from_slice(&io::read(
-        &path.join("manifest.json"),
-        1024 * 1024,
-    )?)?)
+    let bytes = io::read(&path.join("manifest.json"), 1024 * 1024)?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// A checkpoint of another identity, or `Some` mismatch text for another build's tile count.
 #[derive(Debug)]
-struct ForeignConnected;
+struct ForeignConnected(Option<String>);
 
 impl std::fmt::Display for ForeignConnected {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            out,
-            "foreign connected checkpoint identity; refusing to resume"
-        )
+        match &self.0 {
+            Some(mismatch) => write!(out, "connected checkpoint has {mismatch}"),
+            None => write!(out, "foreign connected checkpoint identity"),
+        }?;
+        write!(out, "; refusing to resume")
     }
 }
 
 impl std::error::Error for ForeignConnected {}
 
+/// Refuses another build's tile count (7 or 19); other lengths are left to integrity checks.
+fn check_build(value: &Manifest) -> Result<()> {
+    let count = value.tiles.len();
+    let mismatch = tile_mismatch(count).filter(|_| BUILT_TILE_COUNTS.contains(&count));
+    mismatch.map_or(Ok(()), |text| Err(ForeignConnected(Some(text)).into()))
+}
+
+/// The tile-count refusal for a checkpoint directory, before anything is copied from it.
+pub(super) fn check_tile_count(path: &Path) -> Result<()> {
+    manifest(path).map_or(Ok(()), |value| check_build(&value))
+}
+
 fn validate_identity(value: &Manifest, geometry: Geometry, identity: &str) -> Result<()> {
+    check_build(value)?;
     if super::connected_precision::Precision::from_protocol(&value.protocol).is_err()
         || value.identity != identity
         || value.geometry != geometry
     {
-        return Err(ForeignConnected.into());
+        return Err(ForeignConnected(None).into());
     }
     Ok(())
 }

@@ -792,6 +792,93 @@ contract uses `replay: 1`), `signal: tile` under `lanes`/`hybrid` credit, stagge
 with `signal: tile` in a flow test (the ranking is table-tested), and any quality
 effect of any option.
 
+### Greedy training routes
+
+`connected.route_training` is `"sampled"` (default, omitted from serialization and
+identity) or `"greedy"`. Training passes otherwise sample each route action from
+the router's softmax, while evaluation and completion take the argmax, so the
+routes a sampled run learns on are not the ones it is scored on; the reference
+path trains greedy. With `"greedy"`, every training-time route draw passes no
+generator and takes the argmax, except that with probability
+`connected.route_explore` (in [0, 1), default 0, admitted only with greedy) a pass
+samples as before. The draw is `tuning::hash(seed, key + [EXPL])`: the live anchor
+and its lanes share key `[anchors]`; each prioritized or restart replay pass uses
+`[anchors, position, salt]`. The route update, baseline and everything else are
+unchanged, and credit goes to the action actually taken. Every credit mode routes
+only through those draws (anchor_predicted reuses the anchor's trace), so all four
+modes honour the option. Under greedy routes the score-function update scores the
+argmax action rather than a sampled one, so it is a biased policy gradient, not an
+unbiased REINFORCE estimate (exploration passes excepted). Implementation:
+`connected_route.rs`.
+
+### Anchor waves
+
+`connected.anchor_batch` (u32, admitted 1..=32, default 1, omitted from serialization
+and identity at 1, run identity above 1) is the number of anchors whose tile credit
+is averaged into one tile update; it targets difference 1 of
+`.omc/plans/connected-v58-update-quality-loop-2026-11-18.md` (the reference path
+averages 32 positions per optimizer step). At 1 the training loop calls
+`connected_step::step` unchanged. Above 1 it requires `credit_mode: anchor_exact` and
+refuses `connected.replay` and `restart.replay` (both assume one update per tile per
+anchor), and run admission requires `anchors`, `checkpoint_every` and `eval_every` to
+be multiples of it. Implementation: `connected_wave.rs`.
+
+Waves are aligned: wave k covers anchors `[k b, (k + 1) b)`, so the numerics are a
+function of the anchor index alone and do not depend on `checkpoint_every`,
+`eval_every` or `connected_eval`, which are not identity. STOP, the wall-clock
+deadline, log rows, checkpoints and evaluations are checked only between waves, so
+they always see a ready, validated state at a wave end, and any wave-end checkpoint
+(including a STOP or deadline one) resumes bit-exactly. Retention probes due inside
+a wave run at its end (a few anchors later; still post-exposure).
+
+Within a wave the tiles (transformations and routes) are frozen: one revision
+snapshot serves every anchor's memory reads. Per anchor, as at batch 1: forward with
+the route draw keyed by `[anchors]` (`route_training` honoured), gather, the route
+gradient at that anchor's advantage `loss - baseline`, E and readout-bias Adam steps
+(their clocks stay equal to `anchors`), predictor fit, gain observation,
+`observe_visit`, memory publication, visit counters, loss and scale counters, the
+cursor and the baseline. Tile credit is summed in two `Accumulator`s outside the
+tile bundles. At the boundary, before the last anchor advances (so the local rate's
+anchor index is that anchor's, as at batch 1): each tile with a route sum takes one
+`RouteOnly` step on its mean (divided by the number of anchors in which it routed) at
+`rate` and the route gain recorded at its last routing anchor of the wave, evaluated
+as batch 1 evaluates it (before that anchor's observations). The gain at the boundary
+itself would be wrong in long waves: `epoch` advances once per published frame, so a
+tile last observed early in the wave would be past the 64-epoch gain expiry and step
+at a neutral 1.0. Then each visited tile takes one
+unit-gain local step on its mean exact gradient at
+`local_rate x restart::factor(...)`, both checked out one tile at a time, so the
+resident cap holds however many tiles the wave touched. The two accumulators live
+outside that cap: up to `2 x TILES` full tile-gradient sets during a wave (route and
+local; §Memory scaling). Means divide by visit count
+(a tile visited twice in one anchor counts twice), as at batch 1; the reference path
+instead divides its batch sum by the batch size. The per-anchor guard becomes a
+per-wave guard: at most one local step per touched tile per wave, so a tile commits
+at most twice per wave (route, local) and memory/gain revision lags are unaffected.
+
+Per-tile training state: the loss EMA and cycle loss fold every anchor that visited
+the tile; the gradient-norm EMA folds once per wave (it is observed by the one local
+step); drift, the Lambert dial and chase, due restarts and forgetting settle once at
+the wave end (`restart::settle`). Under the shared change signal a touched tile adds
+`change x (anchors that visited it in the wave) / (wave length)`, where `change` is
+the whole wave's summed change, so a tile visited on one anchor of eight accrues an
+eighth of it (the factor is exactly 1.0 at batch 1). This is an approximation: it
+spreads the wave's change evenly over its anchors, whereas batch 1 credits each
+visited anchor its own change, and the boundary's local tile steps are part of the
+wave's sum.
+`plasticity_sum` adds the dial times the anchors that visited the tile, so
+`plasticity_mean` stays a per-visited-anchor mean; the reference chase runs once per
+wave rather than once per anchor, so under the Lambert law the realized chase per
+anchor is smaller than at batch 1.
+
+Errors: the wave clears `ready` first and sets it only after the boundary and a
+passing `State::validate`, so a failed anchor leaves the state poisoned rather than
+half applied. `Counters::waves` (`completed`, `tiles_stepped`; omitted while unused,
+validated against `anchors`) is in `connected.json` and the report `mechanism`; log
+rows and the report carry `anchor_batch` and, above 1, `waves` and `tiles_per_wave`
+(interval in rows, lifetime in the report). Untested: a wave error in flight, the
+retention-probe shift and any quality effect.
+
 ### Lambert plasticity (experimental)
 
 EXPERIMENT, may be removed or changed; a hypothesis with no measurements.
@@ -864,8 +951,9 @@ At fixed tile dimensions, context, worker count and global-state sizes, adding
 more tiles is intended to keep the dominant resident tile/optimizer working set
 approximately fixed. Cached entries and worker leases share the same resident
 cap. Total parameter count is not the same quantity as resident parameter count.
-Current production code fixes seven tiles and radius-one routing; a larger or
-growing tile bank has not been implemented or measured.
+The tile count is a compile-time constant (§Tile count): seven by default,
+nineteen under the `tiles19` feature. A growing tile bank has not been
+implemented, and no 19-tile run has been measured.
 
 A useful accounting model is `resident_bundles * tile_bundle_bytes + bounded
 worker_scratch + shared_state + per_tile_metadata`. The metadata term grows with
@@ -885,7 +973,10 @@ than packed weights alone, dominates these bundles.
 
 Four decoded bundles (about 14.26 MiB of array payload) are read-only during
 lane jobs in v3; four job gradients add about 4.30 MiB and the per-tile gradient
-sums held until all lanes finish add up to seven times 1.07 MiB (7.51 MiB); Adam
+sums held until all lanes finish add up to seven times 1.07 MiB (7.51 MiB); anchor
+waves (§Anchor waves) hold a route and a local sum per touched tile outside the
+resident cap, at most 2 x 7.51 MiB (15.03 MiB) at 7 tiles and 2 x 20.42 MiB (40.84
+MiB) at 19 (`4 x` the tile coefficients of §Tile count, per set); Adam
 proposals and one before-update trit snapshot exist only for the single tile
 being updated. This arithmetic excludes other allocations and is not an RSS
 guarantee. The main always-resident arrays at width 128 are embedding plus Adam
@@ -901,6 +992,42 @@ are outside the explicit bundle count. The earlier 52.48 MiB measured peak
 working set and host-memory stop do not establish a parameter-capacity limit:
 that stop observes system-wide available memory, independently of the trainer's
 512 MiB Job commit cap.
+
+## Tile count
+
+`geometry::RADIUS` is 1 by default and 2 under the Cargo feature `tiles19`;
+`TILES = 1 + 3 * RADIUS * (RADIUS + 1)` (7 or 19). It stays a constant because
+about 66 fixed-size per-tile arrays live in state, reports and serialized records;
+a run-time tile count is the growth spec's Phase 2. One process-wide `Mesh`
+(`geometry::mesh()`) holds axial coordinates in increasing `q`, then `r`, so the
+order is point-symmetric and the centre `(0, 0)` is the middle id,
+`START_TILE = TILES / 2` (3 or 9). Radius 2 ids: `q = -2`: 0-2; `q = -1`: 3-6;
+`q = 0`: 7-11 (`r = -2..2`, centre 9); `q = 1`: 12-15; `q = 2`: 16-18. A tile's
+route actions are its neighbours in ascending id order plus halt: 7 for the
+centre and inner ring, 5 for an outer-edge tile, 4 for an outer corner (radius 1:
+7 at the centre, 4 elsewhere). Tile seeds stay `seed + 16 + 16 * id`; eleven
+matrices fit in each 16-wide block, so no tile's seeds collide at any id.
+
+At width 128 (m 384) a tile has `279,680 + 384 * r` coefficients: 19 tiles hold
+5,353,472, plus 82,176 shared (E and the predictor), 5,435,648 in all (7 tiles:
+2,051,840). `causal plan` prints `tiles`, `radius` and `start_tile`, and its ledger
+uses the centre tile as the largest.
+
+Identity: a run identity gains `"tiles": TILES` only when the count is not seven,
+so every seven-tile identity and checkpoint is unchanged and a 19-tile run with an
+otherwise equal config has a different identity. A run config may state its build
+with a top-level `"tiles": 19` (absent means 7); train and the `complete` command
+refuse a config whose count differs from the binary's, naming the build to use.
+The field is checked, never identity, so existing configs keep their bytes and
+identities. Checkpoint loading compares the manifest's tile count first: another
+build's count (7 or 19) is refused as a foreign checkpoint that names the needed
+build, before any array is decoded, and is left in place, never quarantined.
+Completion runs the same check on the source manifest before copying anything.
+Any other length is plain corruption and takes the integrity path (quarantined,
+then fallback to an older checkpoint). Changing the feature changes the binary,
+so resumes run under the pinned build that started the run (`scripts/AGENTS.md`). `resident_tiles` admits `workers..=TILES`, and
+`restart.plasticity` takes exactly `TILES` values. The core v2 path also builds at
+19 tiles but has no 19-tile goldens; only the connected path is a Phase 1 target.
 
 ## Read-only checkpoint completion
 

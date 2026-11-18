@@ -6,7 +6,6 @@ use super::shared::{Prefix, Shared};
 use super::store_api::TileStore;
 use super::tile_gradients::TileGradients;
 use super::{norm, routing};
-use crate::topology::Mesh;
 use anyhow::{ensure, Result};
 
 pub(super) struct Frame {
@@ -68,7 +67,7 @@ pub(super) fn forward<S: TileStore>(
     mut memory: impl FnMut(usize, &[f32]) -> Result<Vec<f32>>,
 ) -> Result<Trace> {
     ensure!((1..=4).contains(&visits), "invalid connected visit bound");
-    let mesh = Mesh::new(1)?;
+    let mesh = super::geometry::mesh();
     let versions = store.versions()?;
     let (mut tile_id, mut input) = (START_TILE, prefix.initial(geometry).to_vec());
     let mut frames = Vec::with_capacity(visits);
@@ -98,7 +97,7 @@ pub(super) fn forward<S: TileStore>(
             raw_rms: forward.raw_rms,
         });
         input = next_input;
-        match destination(&mesh, tile_id, action)? {
+        match destination(mesh, tile_id, action)? {
             Some(next) => tile_id = next,
             None => break,
         }

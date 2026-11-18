@@ -55,9 +55,30 @@ pub(super) fn consistent(entry: &TileRestart, config: Restart, anchors: u64) -> 
         && entry.due_since.is_none_or(|since| since <= anchors)
 }
 
+/// Restarts the tile's schedule at `anchors`; with `adapt`, a cycle that lowered the mean loss
+/// shortens the next one and any other lengthens it, within `clamp` of the threshold.
+pub(super) fn restart(entry: &mut TileRestart, config: Restart, threshold: f64, anchors: u64) {
+    let mean = entry.cycle_loss / entry.cycle_anchors.max(1) as f64;
+    if let (true, Some(previous)) = (config.adapt > 0.0, entry.previous_mean) {
+        let scale = if mean < previous {
+            1.0 - config.adapt
+        } else {
+            1.0 + config.adapt
+        };
+        entry.bar = (entry.bar * scale).clamp(threshold / config.clamp, threshold * config.clamp);
+    }
+    entry.previous_mean = Some(mean);
+    entry.origin = anchors;
+    entry.drift = 0.0;
+    entry.signal.snapshot();
+    entry.cycle_loss = 0.0;
+    entry.cycle_anchors = 0;
+    entry.restarts += 1;
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{due, Restart, TileRestart};
+    use super::{due, Restart, TileRestart, TILES};
 
     #[test]
     fn stagger_waits_out_the_window_then_serves_the_longest_due() {
@@ -69,7 +90,7 @@ mod tests {
         // Tile 0 restarted at anchor 5; tile 1 has waited since 2 at ratio 1.1, tile 3 is
         // newly due at ratio 3 (or has also waited since 2).
         let tiles = |older: Option<u64>| {
-            let mut tiles = vec![TileRestart::new(1.0, 1.0); 7];
+            let mut tiles = vec![TileRestart::new(1.0, 1.0); TILES];
             (tiles[0].restarts, tiles[0].origin) = (1, 5);
             (tiles[1].drift, tiles[1].due_since) = (1.1, Some(2));
             (tiles[3].drift, tiles[3].due_since) = (3.0, older);

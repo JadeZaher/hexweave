@@ -85,6 +85,7 @@ impl Log {
             line["restart"] = restart;
         }
         add_scale(&mut line, state, &self.previous, interval_anchors);
+        add_waves(&mut line, state, &self.previous);
         if let Some(prior) = self.readout_prior.take() {
             line["readout_prior"] = json!(prior);
         }
@@ -109,6 +110,18 @@ pub(super) fn gains(state: &State, store: &Store) -> Vec<f32> {
 /// Per-tile predictor trust; local update multipliers are `gains * trust`.
 pub(super) fn trust(state: &State) -> Vec<f64> {
     (0..TILES).map(|tile| state.predictor.trust(tile)).collect()
+}
+
+/// Adds `anchor_batch` and, above 1, waves and mean tiles stepped per wave since `previous`.
+pub(super) fn add_waves(value: &mut Value, state: &State, previous: &Counters) {
+    value["anchor_batch"] = json!(state.options.anchor_batch);
+    if state.options.anchor_batch > 1 {
+        let (now, old) = (state.counters.waves, previous.waves);
+        let waves = now.completed - old.completed;
+        value["waves"] = json!(waves);
+        let tiles = (now.tiles_stepped - old.tiles_stepped) as f64;
+        value["tiles_per_wave"] = json!(average(tiles, waves));
+    }
 }
 
 /// Adds readout-RMS, raw visit-RMS, knot-overflow and change means since `previous`, plus maxima.

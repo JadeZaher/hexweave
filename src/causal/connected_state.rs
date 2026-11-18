@@ -4,6 +4,7 @@ use super::connected_config::Options;
 use super::connected_gain::Gain;
 use super::connected_predictor::Predictor;
 use super::connected_signal::Memory;
+use super::connected_wave::Waves;
 use super::cursor::Cursor;
 use super::geometry::{Geometry, TILES, VOCAB};
 use super::shared::Shared;
@@ -58,6 +59,9 @@ pub(super) struct Counters {
     /// Sum over anchors of their relative E-plus-local-tile change (CONNECTED.md §Warm restarts).
     #[serde(default)]
     pub change_sum: f64,
+    /// Anchor waves completed and tiles they stepped (CONNECTED.md §Anchor waves); omitted at 0.
+    #[serde(default, skip_serializing_if = "Waves::is_unused")]
+    pub waves: Waves,
 }
 
 pub(super) struct State {

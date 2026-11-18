@@ -286,10 +286,7 @@ fn prepare(
             // Zero trust skips local differentiation; see CONNECTED.md §Calibrated predictor.
             gain: state.gains[lane.tile].value_at(state.epoch, revision, options)
                 * state.predictor.trust(lane.tile) as f32,
-            random: tuning::hash(
-                state.seed,
-                &[state.anchors, index as u64, lane.depth as u64, 0x4c4f4341],
-            ),
+            random: super::connected_route::lane(options, state, index, lane.depth),
         });
     }
     Ok(jobs)

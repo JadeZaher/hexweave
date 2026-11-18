@@ -185,6 +185,45 @@ fn failed_visit_and_panic_evict_optimizer_and_poison_publication() -> Result<()>
 }
 
 #[test]
+fn other_build_tile_counts_are_refused_in_place_and_odd_counts_quarantined() -> Result<()> {
+    let out = fresh("tile-count")?;
+    let geometry = Geometry::fixture();
+    let mut store = Store::new(&out.join("connected-tiles"), geometry, 7, 4)?;
+    checkpoint::save(&out, &mut store, "identity", 1, &common(1))?;
+    let newest = checkpoint::save(&out, &mut store, "identity", 2, &common(2))?;
+    drop(store);
+    let path = newest.join("manifest.json");
+    let original: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let resize = |count: usize| -> Result<()> {
+        let mut manifest = original.clone();
+        let tiles = manifest["tiles"].as_array_mut().unwrap();
+        let first = tiles[0].clone();
+        tiles.resize(count, first);
+        Ok(std::fs::write(&path, serde_json::to_vec(&manifest)?)?)
+    };
+    // Another build's count names that build and leaves the checkpoint where it is.
+    let other = if TILES == 7 { 19 } else { 7 };
+    resize(other)?;
+    let error = checkpoint::resume(&out, geometry, "identity", 4)
+        .err()
+        .unwrap();
+    let expected = format!("has {other} tiles but this binary is built for {TILES}");
+    assert!(format!("{error:#}").contains(&expected), "{error:#}");
+    let names = std::fs::read_dir(out.join("checkpoints"))?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(newest.exists() && !names.iter().any(|name| name.contains(".rejected-")));
+    // Any other length is corruption: quarantined, with fallback to the older checkpoint.
+    resize(TILES + 1)?;
+    let loaded = checkpoint::resume(&out, geometry, "identity", 4)?.unwrap();
+    assert_eq!(loaded.anchors, 1);
+    assert!(!newest.exists());
+    Ok(())
+}
+
+// Seven literal per-tile values; the float-printing risk does not depend on tile count.
+#[cfg(not(feature = "tiles19"))]
+#[test]
 fn checkpoint_counters_and_report_mechanism_parse_to_the_same_json() -> Result<()> {
     // scripts/core_owner_checkpoint.py admits recovery only if connected.json `counters` and
     // report.json `mechanism` parse equal; the two writers must print every float the same way.

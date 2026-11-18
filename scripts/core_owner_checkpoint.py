@@ -77,7 +77,8 @@ def checkpoint(out: Path, report: dict, expected_protocol: str) -> Path:
         if older.get("identity") != identity or older.get("protocol") != manifest["protocol"]:
             raise ValueError("foreign checkpoint in recovery run")
     tiles, common = manifest.get("tiles", []), manifest.get("common", {})
-    if len(tiles) != 7 or set(common) != {"connected.json", "shared.bin"}:
+    # Seven tiles (default build) or nineteen (`--features tiles19`); the binary checks which.
+    if len(tiles) not in (7, 19) or set(common) != {"connected.json", "shared.bin"}:
         raise ValueError("incomplete recovery checkpoint")
     expected = {f"tiles/{index}.bin": meta["hash"] for index, meta in enumerate(tiles)} | common
     for relative, expected_hash in expected.items():

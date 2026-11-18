@@ -136,7 +136,8 @@ fn completion_uses_a_verified_checkpoint_without_mutating_it() -> Result<()> {
     let mut document = json!({ "schema": 1, "out": out, "data": {
         "kind": "corpus", "root": corpus.path(), "manifest_sha256": manifest,
         "window": 512 }, "seed": 7, "rate": 0.003, "anchors": 1, "wall_seconds": 1,
-        "checkpoint_every": 1, "eval_every": 1, "eval_cases": 1, "resume": false });
+        "checkpoint_every": 1, "eval_every": 1, "eval_cases": 1, "resume": false,
+        "tiles": super::geometry::TILES });
     std::fs::write(&config_path, serde_json::to_vec(&document)?)?;
     let config: Config = serde_json::from_value(document.clone())?;
     let _guard = tuning::scoped(config.knobs());

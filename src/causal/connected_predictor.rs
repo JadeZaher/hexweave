@@ -4,7 +4,6 @@ use super::connected_calibration::Calibration;
 use super::connected_signal::{cosine, length, Kind, Record};
 use super::geometry::{Geometry, TILES};
 use super::{norm, tuning};
-use crate::topology::Mesh;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -101,7 +100,7 @@ impl Predictor {
             norm::vector(values, d)?;
         }
         ensure!(tile_id < TILES, "invalid predictor tile");
-        let mesh = Mesh::new(1)?;
+        let mesh = super::geometry::mesh();
         let point = mesh.coordinates()[tile_id];
         let x = norm::rms(input)?;
         let y = norm::rms(output)?;

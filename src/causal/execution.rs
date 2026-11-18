@@ -7,7 +7,7 @@ use crate::topology::Mesh;
 use anyhow::{ensure, Result};
 
 /// Every route enters the mesh here: training, evaluation and generation alike.
-pub(super) const START_TILE: usize = 3;
+pub(super) const START_TILE: usize = super::geometry::START_TILE;
 
 pub(super) trait TrainingSource {
     fn validate(&self, cursor: &Cursor) -> Result<()>;
@@ -75,7 +75,7 @@ pub(super) fn forward_path<S: TileStore>(
     random: &mut Option<u64>,
     versions: [u64; TILES],
 ) -> Result<Trace> {
-    let mesh = Mesh::new(1)?;
+    let mesh = super::geometry::mesh();
     let (mut id, mut input) = (START_TILE, prefix.initial(geometry).to_vec());
     let mut frames = Vec::with_capacity(VISITS);
     for depth in 0..VISITS {
@@ -97,7 +97,7 @@ pub(super) fn forward_path<S: TileStore>(
             action,
             depth,
         });
-        match destination(&mesh, id, action)? {
+        match destination(mesh, id, action)? {
             Some(next) => id = next,
             None => break,
         }

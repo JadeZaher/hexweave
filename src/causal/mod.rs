@@ -39,6 +39,9 @@ mod connected_restart;
 mod connected_restart_config;
 mod connected_restart_due;
 mod connected_restart_replay;
+mod connected_route;
+#[cfg(test)]
+mod connected_route_contracts;
 mod connected_signal;
 mod connected_simd;
 mod connected_state;
@@ -50,6 +53,7 @@ mod connected_tile_signal;
 mod connected_train;
 mod connected_update;
 mod connected_update_scale;
+mod connected_wave;
 mod core_ahead;
 mod core_batch;
 mod core_best;
@@ -120,6 +124,8 @@ mod connected_bias_contracts;
 mod connected_contracts;
 #[cfg(test)]
 mod connected_curve_contracts;
+#[cfg(test)]
+mod connected_golden_contracts;
 #[cfg(test)]
 mod connected_numeric_contracts;
 #[cfg(test)]

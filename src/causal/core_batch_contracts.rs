@@ -5,7 +5,7 @@ use super::core_contracts::{assay, fingerprint, fresh_temp};
 use super::core_drill::Drill;
 use super::core_schedule::Decay;
 use super::execution::{self, TrainingSource};
-use super::geometry::Geometry;
+use super::geometry::{Geometry, TILES};
 use super::resident::ResidentStore;
 use super::state::State;
 use super::tuning::{self, Knobs};
@@ -35,12 +35,13 @@ fn fresh(drill: &Drill) -> Result<(State, ResidentStore)> {
 /// Compare tiles, E, latents, baseline, loss and correction history; exclude predictor bytes/features.
 fn comparable(state: &State, store: &ResidentStore) -> Result<Vec<Vec<u8>>> {
     let mut parts = fingerprint(state, store)?;
-    parts.remove(8);
+    // Parts are the tiles, then shared, predictor, latents, calls, history, baseline, loss.
+    parts.remove(TILES + 1);
     let mut history = state.history.clone();
     for record in &mut history.records {
         record.features.clear();
     }
-    parts[10] = serde_json::to_vec(&history)?;
+    parts[TILES + 3] = serde_json::to_vec(&history)?;
     Ok(parts)
 }
 
@@ -234,7 +235,8 @@ fn batch_config_rejects_invalid_resource_and_resume_boundaries() -> Result<()> {
     let base = json!({"schema":1,"out":"work/core-runs/config-test",
         "data":{"kind":"drill","root":"datasets/retained-text-assay"},
         "seed":7,"rate":0.003,"anchors":32,"wall_seconds":1,
-        "checkpoint_every":5,"eval_every":7,"eval_cases":1,"resume":false,"batch":4});
+        "checkpoint_every":5,"eval_every":7,"eval_cases":1,"resume":false,"batch":4,
+        "tiles":super::geometry::TILES});
     for (field, value) in [
         ("batch", json!(0)),
         ("batch", json!(33)),

@@ -9,7 +9,6 @@ use super::super::execution::destination;
 use super::super::shared::Prefix;
 use super::super::tile_gradients::TileGradients;
 use super::super::tuning::{self, Knobs};
-use crate::topology::Mesh;
 use anyhow::Result;
 
 pub(super) struct Job {
@@ -22,7 +21,7 @@ pub(super) struct Job {
     pub revision: u64,
     pub shared_revision: u64,
     pub gain: f32,
-    pub random: u64,
+    pub random: Option<u64>,
 }
 
 pub(super) struct Outcome {
@@ -49,11 +48,11 @@ fn execute(
     let features = predictor.features(&job.input, &forward.output, &job.history, label, tile.id)?;
     let correction = predictor.predict(&features, tile.id)?;
     let action = if job.depth + 1 < options.visits {
-        Some(tile.route(&forward, &job.history, &mut Some(job.random))?)
+        Some(tile.route(&forward, &job.history, &mut { job.random })?)
     } else {
         None
     };
-    let next = destination(&Mesh::new(1)?, tile.id, action)?;
+    let next = destination(super::super::geometry::mesh(), tile.id, action)?;
     let record = Record {
         input: job.input,
         output: forward.output.clone(),

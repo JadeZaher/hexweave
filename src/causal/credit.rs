@@ -15,7 +15,6 @@ use super::telemetry::{self, Phase};
 #[cfg(test)]
 use super::tile_gradients::TileGradients;
 use super::tuning;
-use crate::topology::Mesh;
 use anyhow::{ensure, Result};
 
 pub(super) struct Credit {
@@ -180,7 +179,7 @@ pub(super) fn records(
     shared_version: u64,
     opportunity: u64,
 ) -> Result<Vec<Record>> {
-    let mesh = Mesh::new(1)?;
+    let mesh = super::geometry::mesh();
     let mut records = Vec::with_capacity(trace.frames.len());
     for (index, frame) in trace.frames.iter().enumerate() {
         let output = trace

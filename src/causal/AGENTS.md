@@ -68,6 +68,9 @@ options and the experimental Lambert law are in
 [Lambert plasticity](CONNECTED.md#lambert-plasticity-experimental). See
 [the v5 section](CONNECTED.md#label-conditioned-credit-predictor-and-gain-scaled-decay-v5).
 v1-v4 checkpoints and the pre-v5.2 v5 pilots resume only under their pinned binaries.
+`connected.anchor_batch` (default 1, identity above 1, `anchor_exact` only) freezes
+tiles over aligned waves of that many anchors and steps each touched tile once at
+the wave end; see [anchor waves](CONNECTED.md#anchor-waves).
 
 Connected checkpoint completion uses `connected_completion` and frozen evaluation
 replay. It snapshots the exact named checkpoint into owned `work/inference/`
@@ -679,7 +682,7 @@ adds their payload and reserves caller correction plus predictor's target,
 prediction and derivative vectors. This is an integration correction to the
 initial proposed phase formula; it is still not measured heap or RSS.
 
-Execution also allocates a seven-coordinate Mesh, one temporary <=6-neighbor
+Execution reads the process-wide Mesh (`geometry::mesh`, CONNECTED.md §Tile count), allocates one temporary <=6-neighbor
 vector, four Frame headers, four correction Vec headers and eight Record
 headers. On 64-bit targets Frame is expected to require 64 bytes (including its
 24-byte Vec header and 16-byte Option<usize>); the earlier 32-byte tape metadata

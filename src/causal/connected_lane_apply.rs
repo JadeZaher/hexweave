@@ -44,8 +44,30 @@ impl Accumulator {
         self.sums.iter().filter(|sum| sum.is_some()).count() as u64
     }
 
+    /// One route step per tile from its mean summed route gradient at `gains[tile]` (waves).
+    pub fn apply_routes(
+        mut self,
+        state: &mut State,
+        store: &mut Store,
+        options: &Options,
+        rate: f64,
+        gains: &[f32; TILES],
+    ) -> Result<()> {
+        for (tile, &gain) in gains.iter().enumerate() {
+            if let Some(mean) = self.take_mean(tile) {
+                route_step(state, store, tile, &mean, gain, options, rate)?;
+            }
+        }
+        Ok(())
+    }
+
     /// `tile`'s mean gradient, if any contribution reached it.
     pub fn into_mean(mut self, tile: usize) -> Option<TileGradients> {
+        self.take_mean(tile)
+    }
+
+    /// Removes `tile`'s sum and divides it by its contribution count: the one mean divisor.
+    pub fn take_mean(&mut self, tile: usize) -> Option<TileGradients> {
         let (mut mean, count) = self.sums[tile].take()?;
         for values in &mut mean.values {
             values.iter_mut().for_each(|value| *value /= count as f32);
@@ -57,22 +79,21 @@ impl Accumulator {
     /// while `use_trust = true` uses `Lambert(gain)` on exact-seeded tiles and `Lambert(gain) * trust`
     /// on predicted-only tiles.
     pub fn apply_with_trust(
-        self,
+        mut self,
         state: &mut State,
         store: &mut Store,
         options: &Options,
         use_trust: bool,
     ) -> Result<()> {
-        let exact = self.exact;
-        for (tile, entry) in self.sums.into_iter().enumerate() {
-            let Some((mut mean, count)) = entry else {
+        for (tile, exact) in self.exact.into_iter().enumerate() {
+            if self.sums[tile].is_none() {
                 continue;
-            };
+            }
             let revision = store.slots[tile].meta.revision;
             let lambert = state.gains[tile].value_at(state.epoch, revision, options);
             let gain = if !use_trust {
                 1.0
-            } else if exact[tile] {
+            } else if exact {
                 lambert
             } else {
                 lambert * state.predictor.trust(tile) as f32
@@ -80,10 +101,9 @@ impl Accumulator {
             if gain <= 0.0 {
                 continue;
             }
-            let visits = count as f32;
-            for values in &mut mean.values {
-                values.iter_mut().for_each(|value| *value /= visits);
-            }
+            let Some(mean) = self.take_mean(tile) else {
+                continue;
+            };
             // `anchors` counts completed anchors, so during this lane phase it is the anchor's index.
             restart::observe_gradient(state, tile, &mean);
             let factor = restart::factor(options, state.restarts.as_deref(), state.anchors, tile)?;
@@ -153,14 +173,7 @@ pub(super) fn update_routes(
     options: Options,
     rate: f64,
 ) -> Result<()> {
-    for tile in 0..TILES {
-        if !trace
-            .frames
-            .iter()
-            .any(|frame| frame.tile == tile && frame.action.is_some())
-        {
-            continue;
-        }
+    for tile in (0..TILES).filter(|&tile| routed(trace, tile)) {
         let gradient = connected_anchor::route_gradient(
             store,
             state.geometry,
@@ -168,33 +181,60 @@ pub(super) fn update_routes(
             tile,
             loss - state.baseline,
         )?;
-        let revision = store.slots[tile].meta.revision;
-        let gain = state.gains[tile].value_at(state.epoch, revision, &options);
-        let mut lease = store.checkout(tile)?;
-        let update = (|| {
-            let (tile, latents) = lease.parts_mut()?;
-            connected_update::apply(
-                tile,
-                latents,
-                &gradient,
-                rate,
-                gain,
-                &options,
-                Mode::RouteOnly,
-            )
-        })();
-        let update = match update {
-            Ok(update) => update,
-            Err(error) => {
-                store.abort(tile);
-                return Err(error);
-            }
-        };
-        store.commit(lease)?;
-        state.counters.route_updates += 1;
-        state.counters.tile_transitions += update.transitions as u64;
-        state.counters.opposed_momentum += update.opposed_momentum as u64;
-        track_rms(&mut state.counters, tile, update.max_rms);
+        let gain = route_gain(state, store, tile, &options);
+        route_step(state, store, tile, &gradient, gain, &options, rate)?;
     }
+    Ok(())
+}
+
+/// Whether `tile` took a routing action on `trace`.
+pub(super) fn routed(trace: &Trace, tile: usize) -> bool {
+    trace
+        .frames
+        .iter()
+        .any(|frame| frame.tile == tile && frame.action.is_some())
+}
+
+/// `tile`'s route gain now: its gain at the current epoch and store revision.
+pub(super) fn route_gain(state: &State, store: &Store, tile: usize, options: &Options) -> f32 {
+    let revision = store.slots[tile].meta.revision;
+    state.gains[tile].value_at(state.epoch, revision, options)
+}
+
+/// One checked-out `Mode::RouteOnly` step at `gain`.
+pub(super) fn route_step(
+    state: &mut State,
+    store: &mut Store,
+    tile: usize,
+    gradient: &TileGradients,
+    gain: f32,
+    options: &Options,
+    rate: f64,
+) -> Result<()> {
+    let mut lease = store.checkout(tile)?;
+    let update = (|| {
+        let (tile, latents) = lease.parts_mut()?;
+        connected_update::apply(
+            tile,
+            latents,
+            gradient,
+            rate,
+            gain,
+            options,
+            Mode::RouteOnly,
+        )
+    })();
+    let update = match update {
+        Ok(update) => update,
+        Err(error) => {
+            store.abort(tile);
+            return Err(error);
+        }
+    };
+    store.commit(lease)?;
+    state.counters.route_updates += 1;
+    state.counters.tile_transitions += update.transitions as u64;
+    state.counters.opposed_momentum += update.opposed_momentum as u64;
+    track_rms(&mut state.counters, tile, update.max_rms);
     Ok(())
 }

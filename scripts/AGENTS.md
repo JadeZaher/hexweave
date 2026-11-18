@@ -14,6 +14,15 @@ archived only if an owner wrote it (`owner:` prefix) or `--clear-stop` is
 given; a previous `report.json` is archived so the end receipt can only embed
 this launch's report.
 
+The tile count is fixed at compile time (`src/causal/CONNECTED.md` §Tile count).
+Before a fresh 19-tile launch run `cargo build --release --features tiles19`, and
+a plain `cargo build --release` before returning to 7-tile runs; confirm the
+build with `work/target/release/hexweave.exe causal plan` (`"tiles": 7` or `19`).
+The owner pins whichever build is current, and each binary refuses the other's
+checkpoints. Recovery checkpoint inspection accepts 7 or 19 tile entries.
+Never add the `tiles` key to an in-flight 7-tile run's config: owner recovery compares
+configs, and older pinned binaries reject the key.
+
 The child starts suspended in its own process group, joins a one-process,
 kill-on-close Job with the 512 MiB commit cap, then resumes. Each second the
 owner samples the child's peak working set and host memory; ten consecutive
@@ -102,6 +111,20 @@ Primary API references:
 [job limits](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information),
 [extended memory limits](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_extended_limit_information),
 [process memory information](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getprocessmemoryinfo).
+
+## Sample quality
+
+`sample_quality.py` is the primary inference-quality measure. It runs the
+read-only `hexweave complete` on four fixed story prompts, greedy and nucleus
+(top-p 0.9, temperature 0.8, seeds 1-3), 200 new bytes each, and scores each
+sample with the definitions of `work/inference/reference-decoding-20261111/record.py`
+so numbers stay comparable: share of lower-case words seen at least three times
+in the run's public train split (`data.root/train.txt`), distinct byte 4-gram share, mean word length, and a
+loop flag (64-byte tail with period <= 32). Group values are per-sample means.
+It stops unless every completion reports equal before/after state hashes (and,
+for connected runs, checkpoint hashes) and all 16 share one state hash. It passes
+the run config unchanged (completion normalizes paging keys) and writes one JSON
+file (`--out`, refused inside the run directory) plus a table.
 
 ## Integrated validation
 

@@ -1,4 +1,4 @@
-use super::geometry::{Geometry, EVIDENCE_RULE};
+use super::geometry::{Geometry, EVIDENCE_RULE, RADIUS, START_TILE, TILES};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +48,8 @@ pub(super) fn plan() -> Result<serde_json::Value> {
     let geometry = Geometry::candidate();
     Ok(
         serde_json::json!({"schema":1,"protocol":PROTOCOL,"config":Config::candidate(7),
-        "geometry":geometry,"payload_ledger":geometry.ledger(1024)?,"model_allocated":false,
+        "geometry":geometry,"tiles":TILES,"radius":RADIUS,"start_tile":START_TILE,
+        "payload_ledger":geometry.ledger(1024)?,"model_allocated":false,
         "physical_admission":false,"training_admitted":false,"useful_assistant_estimate_seconds":null,
         "scope":"experimental byte-prefix candidate; original 81M/287M targets remain separate",
         "required":"independent review, integrated checks, owned physical admission and representative quality trajectory"}),

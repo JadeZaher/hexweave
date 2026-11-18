@@ -6,7 +6,6 @@ use super::shared::Prefix;
 use super::state::State;
 use super::store_api::TileStore;
 use super::{core_schedule, tuning};
-use crate::topology::Mesh;
 use anyhow::Result;
 
 pub(super) fn forward<S: TileStore>(
@@ -17,7 +16,7 @@ pub(super) fn forward<S: TileStore>(
     anchor: u64,
     counts: &[u64; TILES],
 ) -> Result<Trace> {
-    let mesh = Mesh::new(1)?;
+    let mesh = super::geometry::mesh();
     let knobs = tuning::current();
     // Begin at the center tile with the final visible byte's embedding/position row.
     let (mut id, mut input) = (START_TILE, prefix.initial(state.geometry).to_vec());
@@ -47,7 +46,7 @@ pub(super) fn forward<S: TileStore>(
             action,
             depth,
         });
-        match destination(&mesh, id, action)? {
+        match destination(mesh, id, action)? {
             Some(next) => id = next,
             None => break,
         }

@@ -197,6 +197,27 @@ pub(super) fn observe_gradient(state: &mut State, tile: usize, mean: &TileGradie
     }
 }
 
+/// Tiles whose live anchor or local visits advanced since `mark`.
+pub(super) fn visited(state: &State, mark: &Mark) -> [bool; TILES] {
+    let counters = &state.counters;
+    std::array::from_fn(|tile| {
+        counters.local_visits[tile] + counters.anchor_visits[tile] != mark.visits[tile]
+    })
+}
+
+/// Folds one anchor's `loss` into each flagged tile's cycle and loss EMA.
+pub(super) fn observe_loss(state: &mut State, flagged: &[bool; TILES], loss: f32) -> Result<()> {
+    let Some(tiles) = state.restarts.as_mut() else {
+        return Ok(());
+    };
+    for (entry, _) in tiles.iter_mut().zip(flagged).filter(|(_, &flag)| flag) {
+        entry.cycle_loss += f64::from(loss);
+        entry.cycle_anchors += 1;
+        entry.signal.observe_loss(f64::from(loss));
+    }
+    Ok(())
+}
+
 /// Warm restarts after Loshchilov & Hutter 2017, SGDR (https://arxiv.org/abs/1608.03983), here
 /// triggered by per-tile drift instead of a fixed period; runs after `anchors` advanced.
 pub(super) fn finish<S: TrainingSource>(
@@ -206,28 +227,51 @@ pub(super) fn finish<S: TrainingSource>(
     mark: &Mark,
     loss: f32,
 ) -> Result<()> {
+    if state.options.restart.is_none() {
+        return Ok(());
+    }
+    let seen = visited(state, mark);
+    let tiles = state
+        .restarts
+        .as_mut()
+        .context("missing connected restart state")?;
+    // A tile counts when visited or locally stepped (replay-only steps included).
+    let touched: [bool; TILES] =
+        std::array::from_fn(|tile| std::mem::take(&mut tiles[tile].stepped) || seen[tile]);
+    observe_loss(state, &touched, loss)?;
+    settle(state, store, source, mark, touched.map(u64::from), 1)
+}
+
+/// Drift or Lambert dial for each tile touched on `touched[tile]` of the `span` anchors since
+/// `mark`, then due restarts; a wave settles once at its end (CONNECTED.md §Anchor waves).
+pub(super) fn settle<S: TrainingSource>(
+    state: &mut State,
+    store: &mut Store,
+    source: &S,
+    mark: &Mark,
+    touched: [u64; TILES],
+    span: u64,
+) -> Result<()> {
     let Some(config) = state.options.restart else {
         return Ok(());
     };
     let change = state.counters.change_sum - mark.change;
     let anchors = state.anchors;
-    let counters = &state.counters;
     let tiles = state
         .restarts
         .as_mut()
         .context("missing connected restart state")?;
-    for (tile, entry) in tiles.iter_mut().enumerate() {
-        let visits = counters.local_visits[tile] + counters.anchor_visits[tile];
-        if !std::mem::take(&mut entry.stepped) && visits == mark.visits[tile] {
-            continue;
-        }
-        entry.cycle_loss += f64::from(loss);
-        entry.cycle_anchors += 1;
-        entry.signal.observe_loss(f64::from(loss));
+    tiles.iter_mut().for_each(|entry| entry.stepped = false);
+    for (entry, &count) in tiles
+        .iter_mut()
+        .zip(&touched)
+        .filter(|(_, &count)| count > 0)
+    {
         match (config.law, config.signal, config.threshold) {
-            (Law::Lambert, _, Some(bar)) => super::connected_plasticity::visit(entry, bar)?,
+            (Law::Lambert, _, Some(bar)) => super::connected_plasticity::visit(entry, bar, count)?,
             (_, Signal::Tile, _) => entry.drift = entry.signal.distance(),
-            _ => entry.drift += change,
+            // The tile's share of the summed change: exactly 1.0 at batch 1.
+            _ => entry.drift += change * (count as f64 / span as f64),
         }
     }
     let chosen = due::due(tiles, config, anchors);
@@ -235,7 +279,7 @@ pub(super) fn finish<S: TrainingSource>(
         return Ok(());
     };
     for &tile in &chosen {
-        restart(&mut tiles[tile], config, threshold, anchors);
+        due::restart(&mut tiles[tile], config, threshold, anchors);
     }
     due::mark_waiting(tiles, config, anchors);
     if config.forget {
@@ -251,25 +295,4 @@ pub(super) fn finish<S: TrainingSource>(
         super::connected_restart_replay::run(state, store, source, tile)?;
     }
     Ok(())
-}
-
-/// Restarts the tile's schedule at `anchors`; with `adapt`, a cycle that lowered the mean loss
-/// shortens the next one and any other lengthens it, within `clamp` of the threshold.
-pub(super) fn restart(entry: &mut TileRestart, config: Restart, threshold: f64, anchors: u64) {
-    let mean = entry.cycle_loss / entry.cycle_anchors.max(1) as f64;
-    if let (true, Some(previous)) = (config.adapt > 0.0, entry.previous_mean) {
-        let scale = if mean < previous {
-            1.0 - config.adapt
-        } else {
-            1.0 + config.adapt
-        };
-        entry.bar = (entry.bar * scale).clamp(threshold / config.clamp, threshold * config.clamp);
-    }
-    entry.previous_mean = Some(mean);
-    entry.origin = anchors;
-    entry.drift = 0.0;
-    entry.signal.snapshot();
-    entry.cycle_loss = 0.0;
-    entry.cycle_anchors = 0;
-    entry.restarts += 1;
 }

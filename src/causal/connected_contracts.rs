@@ -5,7 +5,7 @@ use super::connected_signal::{Kind, Record};
 use super::connected_state::State;
 use super::connected_store::Store;
 use super::core_schedule::Decay;
-use super::geometry::{Geometry, TILES};
+use super::geometry::{Geometry, START_TILE, TILES};
 use super::scratch_dir::ScratchDir;
 use super::{connected_checkpoint, connected_lanes, connected_step, tuning};
 use anyhow::Result;
@@ -140,7 +140,7 @@ fn compare_stores(
     let view_bound = if options.precision.is_ternary() {
         0
     } else {
-        options.workers * Geometry::fixture().tile_coefficients(3)? * 4
+        options.workers * Geometry::fixture().tile_coefficients(START_TILE)? * 4
     };
     assert!(continued_store.stats().peak_view_bytes <= view_bound);
     assert!(
@@ -216,8 +216,8 @@ fn predicted_credit_changes_real_local_weights_and_shared_memory_changes_tile_be
     assert!(visits > counters.local_updates, "lanes must share tiles");
     let records = &predicted.memory.records;
     assert!(records.iter().all(|record| record.revision == 0));
-    let predicted_lease = predicted_store.checkout(3)?;
-    let zero_lease = zero_store.checkout(3)?;
+    let predicted_lease = predicted_store.checkout(START_TILE)?;
+    let zero_lease = zero_store.checkout(START_TILE)?;
     let weights = |lease: &super::connected_store::Lease| {
         lease
             .latents()
@@ -230,7 +230,7 @@ fn predicted_credit_changes_real_local_weights_and_shared_memory_changes_tile_be
         weights(&zero_lease),
         "predictor must change the persistent tile master weights"
     );
-    let initial = super::tile::Tile::new(Geometry::fixture(), 3, 7)?;
+    let initial = super::tile::Tile::new(Geometry::fixture(), START_TILE, 7)?;
     for ((_, matrix), latent) in zero_lease.latents() {
         let expected = (0..initial.matrices[*matrix].len())
             .map(|index| initial.matrices[*matrix].value(index).map(f32::from))
@@ -258,9 +258,11 @@ fn memory_changes_tile_behavior(
     revisions: &[u64; TILES],
 ) -> Result<()> {
     let input = prefix.initial(Geometry::fixture());
-    let memory = state.memory.query(input, 3, state.epoch, revisions, 0)?;
+    let memory = state
+        .memory
+        .query(input, START_TILE, state.epoch, revisions, 0)?;
     assert!(memory.iter().any(|value| *value != 0.0));
-    let lease = store.checkout(3)?;
+    let lease = store.checkout(START_TILE)?;
     let with_memory = lease.tile().forward(input, &prefix.memory, &memory)?;
     let without_memory = lease
         .tile()

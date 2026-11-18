@@ -1,4 +1,4 @@
-use super::geometry::{Geometry, EVIDENCE_RULE};
+use super::geometry::{Geometry, EVIDENCE_RULE, RADIUS};
 use super::norm;
 use crate::ternary::TernaryMatrix;
 use anyhow::{ensure, Result};
@@ -54,7 +54,9 @@ impl Predictor {
         norm::vector(output, d)?;
         norm::vector(history, d)?;
         ensure!(
-            (-1..=1).contains(&q) && (-1..=1).contains(&r) && (-1..=1).contains(&(q + r)),
+            [q, r, q + r]
+                .iter()
+                .all(|value| value.unsigned_abs() as usize <= RADIUS),
             "invalid predictor coordinate"
         );
         let x = norm::rms(input)?;

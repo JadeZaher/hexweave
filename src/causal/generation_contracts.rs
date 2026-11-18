@@ -41,7 +41,7 @@ fn generation_is_immutable_and_preserves_invalid_utf8_without_repair() -> Result
     assert!(!result.valid_utf8);
     assert_eq!(result.stop_reason, Reason::ByteBudget);
     assert_eq!(result.before_sha256, result.after_sha256);
-    assert_eq!(store.updates, [0; 7]);
+    assert_eq!(store.updates, [0; super::geometry::TILES]);
     assert_eq!(state.global_opportunity, 0);
     assert_eq!(state.cursor.supervised_targets, 0);
     Ok(())

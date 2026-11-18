@@ -7,6 +7,7 @@ use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 pub(super) use super::connected_restart_config::Restart;
+pub(super) use super::connected_route::RouteTraining;
 
 /// How tile transformations receive training credit on each connected step.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +75,15 @@ pub(super) struct Options {
     pub credit_mode: CreditMode,
     #[serde(default, skip_serializing_if = "SliceMode::is_default")]
     pub slice_mode: SliceMode,
+    /// Training route choice (CONNECTED.md §Greedy training routes); default sampled.
+    #[serde(default, skip_serializing_if = "RouteTraining::is_default")]
+    pub route_training: RouteTraining,
+    /// Per-anchor share of greedy-mode passes that sample their route instead; default 0.
+    #[serde(default, skip_serializing_if = "super::connected_route::is_zero")]
+    pub route_explore: f64,
+    /// Anchors per tile update under `anchor_exact` (CONNECTED.md §Anchor waves); default 1.
+    #[serde(skip_serializing_if = "super::connected_wave::is_one")]
+    pub anchor_batch: u32,
     /// Evicted dirty bundles held encoded in RAM before a disk write; paging only, never identity.
     #[serde(default, skip_serializing)]
     pub write_behind_tiles: usize,
@@ -121,6 +131,9 @@ impl Default for Options {
             local_decay: Decay::Constant,
             credit_mode: CreditMode::Lanes,
             slice_mode: SliceMode::Full,
+            route_training: RouteTraining::Sampled,
+            route_explore: 0.0,
+            anchor_batch: 1,
             write_behind_tiles: 0,
             resident_tiles: None,
             history: true,
@@ -172,6 +185,8 @@ impl Options {
             "connected local rate must be in (0, 0.1]"
         );
         self.local_decay.validate()?;
+        super::connected_route::validate(self)?;
+        super::connected_wave::validate(self)?;
         // Its long-run factor must stay positive: cosine with floor 0 would hand Adam rate 0.
         ensure!(
             self.local_decay.factor(u64::MAX) > 0.0,
@@ -188,7 +203,7 @@ impl Options {
         ensure!(
             self.write_behind_tiles <= super::connected_store::MAX_WRITE_BEHIND
                 && (self.workers..=TILES).contains(&self.resident()),
-            "connected write_behind_tiles must be 0..=64 and resident_tiles workers..=7"
+            "connected write_behind_tiles must be 0..=64 and resident_tiles workers..={TILES}"
         );
         if let Some(replay) = self.replay {
             ensure!(
@@ -240,6 +255,7 @@ impl Options {
 
     pub fn validate_run(&self, config: &Config) -> Result<()> {
         self.validate()?;
+        super::connected_wave::validate_run(self, config)?;
         // A tile step's realized multiplier never exceeds gain_max, so every decay keeps a master.
         // max() is future-proofing: within current ranges only `rate` can trip this bound.
         let plasticity = self.restart.map_or(1.0, |restart| restart.max_plasticity());
