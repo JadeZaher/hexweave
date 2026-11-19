@@ -179,4 +179,61 @@ estimate be built and tested together. That is round 3 and the loop continues on
 with the stop rule reset: if round 3 keeps nothing, stop and reassess with the owner before any
 further rounds.
 
-(Later rounds are appended here.)
+### Round 3 (2026-11-18/19): visit balance
+
+`connected.balance` with horizon 1024, on the build from commit 810ca21. Pilots ran beside other
+runs; readings at 8,192 / 16,384 / 24,576 / 32,768 / 40,960 (base 3.900, 3.756, 3.570, 3.674, 3.459).
+
+| Pilot | Readings | Visit shares, % | Note |
+| :--- | :--- | :--- | :--- |
+| `rate` 1.0 | 4.099, 3.895, 3.675, 3.673, 3.576 | 11, 8, 29, 47, 4, 0, 1 | Starved tiles sat at the 4x multiplier and stayed starved: rate alone does not attract traffic. |
+| `route` 1.0 | 4.009, 3.777, 3.702, 3.752 | 6, 24, 12, 39, 7, 7, 6 | Traffic spread; loss behind early. |
+| both | 4.181, 3.822, 3.700 | 8, 8, 16, 36, 18, 9, 5 | Traffic spread; loss behind early. |
+
+**6-hour run, both (396,277 anchors, 19.4 anchors/s): not kept.** Visit shares 10, 14, 8, 33, 17,
+10, 8 per cent, the flattest of any run. Windowed means against constant rate / Lambert: 0–100k
+3.562 / 3.496 / 3.496; 100–200k 3.228 / 3.188 / 3.186; 200–300k 3.069 / 3.062 / 3.000; 300–400k
+2.970 / 2.995 / 2.870. Level with the constant-rate base, behind Lambert. Evening out tile use did
+not improve the curve, so uneven tile use is not what holds the loss up; it accompanies the
+recipes that do worse without causing it. The worth estimates were positive for five outer tiles
+and negative for one or two in each run (correlational).
+
+**Lambert continuation finished (1,468,243 anchors).** Windowed means against the restart run at
+the same anchors: 1.0–1.1M 2.635 / 2.675; 1.1–1.2M 2.612 / 2.628; 1.2–1.3M 2.640 / 2.622; 1.3–1.4M
+2.622 / 2.620; 1.4–1.47M 2.637 / 2.636. Last evaluation 2.569, best single 2.504 at 1.32M. Its
+lead over the restart run (0.05–0.13 through 900k) is gone by 1.1M: the two recipes meet at about
+2.62–2.64. The restart run later reached 2.557 over 1.6–1.69M.
+
+**Inference quality** (`scripts/sample_quality.py`; 16 completions per checkpoint; share of
+generated words that occur at least three times in the train split, sampled T 0.8 p 0.9 / greedy):
+
+| Checkpoint | Held-out | Sampled known words | Greedy known words | Greedy loops | Distinct 4-grams (sampled) |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| Reference path, 2.28M anchors | about 2.2 | 0.876 | 0.954 | 2 of 4 | 0.827 |
+| Lambert, 1.47M | 2.57 | 0.949 | 0.994 | 3 of 4 | 0.799 |
+| Dynamic restarts, 1.69M | 2.56 | 0.841 | 0.865 | 0 of 4 | 0.826 |
+| Balance (both), 396k | 2.94 | 0.700 | 0.816 | 0 of 4 | 0.838 |
+
+By word validity the Lambert checkpoint is at or above the reference path despite a held-out gap
+of about 0.35 bits/byte. The metric counts real words, not coherence, and favours common words, so
+it does not show the Lambert model is better; it shows the held-out gap is not a gap in producing
+valid words.
+
+### Loop stopped (2026-11-19)
+
+Round 3 kept nothing, so the loop stops here under its rules, for reassessment with the owner.
+
+What three rounds established, on seed 7 at 7 tiles:
+- Cleared as limits at the horizons tested: weight decay, windowed slicing, the step-size cap,
+  sampled training routes, single-anchor updates, uneven tile use.
+- The only change that moved the curve was keeping the tile rate up. Recipes that do so (constant
+  rate, dynamic restarts, Lambert plasticity) differ by up to 0.13 before 1M anchors and converge
+  to 2.62–2.64 by 1.1–1.4M. Lambert gets there faster.
+- The target of 2.2 was not reached. The best windowed mean is 2.557 (restart run, 1.6–1.69M); the
+  best single evaluation is 2.476.
+- Differences from the reference path not yet tested: forward numerics (ternary forward against
+  FP32 with post-visit RMS normalization) and the form of the history input, including the
+  one-anchor eligibility of shared-memory records.
+
+Options for the owner are in the session report of 2026-11-19; the default recommendation is to
+take Lambert plasticity as the base recipe into the 19-tile test of the growth spec.
