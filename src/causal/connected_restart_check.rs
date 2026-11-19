@@ -1,7 +1,7 @@
 //! Restart-state validation and per-tile reporting; see CONNECTED.md §Warm restarts.
 
 use super::super::connected_restart_config::{Law, MAX_PLASTICITY};
-use super::{factor, Restart, State, TileRestart, TILES};
+use super::{Restart, State, TileRestart, TILES};
 use anyhow::{bail, ensure, Result};
 use serde_json::{json, Value};
 
@@ -106,7 +106,7 @@ pub(in super::super) fn report(state: &State) -> Result<Option<Value>> {
         return Ok(None);
     };
     let factors = (0..TILES)
-        .map(|tile| factor(&state.options, Some(tiles), state.anchors, tile))
+        .map(|tile| super::super::connected_balance::rate_factor(&state.options, state, tile))
         .collect::<Result<Vec<f64>>>()?;
     let field = |read: fn(&TileRestart) -> Value| tiles.iter().map(read).collect::<Vec<_>>();
     let mean = |sum: f64, count: u64| (count > 0).then(|| sum / count as f64);

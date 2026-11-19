@@ -127,4 +127,56 @@ Base (constant rate 0.8×): 3.900, 3.756, 3.570, 3.674, 3.459 | 3.672.
 
 Neither weight decay nor windowed slicing limits the connected path over the first 41k anchors.
 
+### Round 2 (2026-11-18): step-size cap, greedy routes (test B), waves (test A)
+
+Ran beside the Lambert long run, on the build from commit 0d1da33 (7 tiles).
+
+| Pilot | 8,192 | 16,384 | 24,576 | 32,768 | 40,960 | Anchors/s | Outcome |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| Base | 3.900 | 3.756 | 3.570 | 3.674 | 3.459 | 26.1 | |
+| `max_update_norm` 4 | 3.900 | 3.755 | 3.570 | 3.674 | 3.459 | 25.1 | Identical to base: the cap never binds. Dropped. |
+| `route_training: greedy` | 3.883 | 3.709 | 3.734 | 3.688 | – | 21.6 | Neutral. Not promoted. |
+| greedy, `route_explore` 0.05 | 3.860 | 3.742 | 3.624 | 3.716 | – | 23.6 | Neutral. Not promoted. |
+| `anchor_batch` 4 | 4.268 | 3.897 | 3.617 | 3.567 | 3.455 | 45.2 | Behind early, level from 32k. Promoted. |
+| `anchor_batch` 8 | 4.336 | 4.033 | 3.782 | 3.728 | 3.566 | 53.3 | Behind; closing by 74k. |
+| `anchor_batch` 32 | 4.372 | 4.226 | 4.010 | 4.037 | 3.885 | 52.5 | Well behind early; 0.05 behind by 82k. |
+
+Past 41k anchors, against the 6-hour constant-rate run at the same anchors (base / wave 4 / wave 8 /
+wave 32): 49,152: 3.512 / 3.508 / 3.567 / 3.762; 57,344: 3.318 / 3.347 / 3.426 / 3.616; 65,536:
+3.446 / 3.385 / 3.487 / 3.589; 73,728: 3.347 / 3.308 / 3.382 / 3.469; 81,920: 3.383 / – / 3.468 /
+3.437.
+
+Reading: waves do not improve quality per anchor at this horizon, so single-sample updates are not
+shown to be a quality limit. They roughly double throughput (fewer tile commits), and a wave of 4
+is level with the base per anchor from 32k anchors, so it reaches a given loss in about half the
+time. Promoted on that basis, and because fewer, averaged updates may matter more later:
+`connected-fp32-v58-wave4-6h-s7-20261118` (6 hours). Larger waves take proportionally fewer tile
+steps at the same step size; a wave-32 arm with a raised tile rate is a candidate for a later
+round.
+
+**6-hour wave-of-4 run (876,780 anchors, 44.6 anchors/s, 5.51 GB written): dropped.** Windowed
+means by 100k anchors, constant rate / wave 4: 0–100k 3.496 / 3.553; 100–200k 3.188 / 3.269;
+200–300k 3.062 / 3.144; 300–400k 2.995 / 3.034; 400–500k 2.904 / 3.008; then wave 4 alone 2.971,
+2.943, 2.943, 2.898 to 900k (the restart run was at 2.77–2.79 over 600–900k). It fell behind per
+anchor after the pilot horizon and flattened. At equal wall time (6 hours) it ended at 2.90 against
+the constant-rate run's 2.87, so the doubled throughput bought nothing. Its tile use collapsed:
+visit shares 25, 6, 31, 38, 0, 0, 0 per cent, with three tiles untrained (master RMS 0.85–0.87).
+
+**Lambert continuation (in progress at 1.06M anchors):** windowed means 2.799 (400–500k), 2.792,
+2.701, 2.709, 2.688, 2.736 (900k–1.0M), 2.627 (1.0–1.06M, 7 evaluations); best single 2.566 at
+688k. Against the restart run at the same windows it leads by 0.05–0.13 through 900k.
+
+### Stop rule reached after round 2
+
+Rounds 1 and 2 kept nothing, which is the "two consecutive rounds keep nothing" condition.
+Reassessment: five of the six suspected differences from the reference path are cleared as limits
+at the horizons tested (weight decay, slicing, step-size cap, sampled routes, single-anchor
+updates). Every piece of positive evidence points at uneven tile use: Lambert's lead comes with a
+flatter visit distribution; the history-off pilot and the wave-4 run both lost tiles; under a
+constant rate one tile stays at 1–2% of visits. The owner directed on 2026-11-18 that the visit
+balance mechanisms (rate, training-time route bonus, memory retention) and a per-tile worth
+estimate be built and tested together. That is round 3 and the loop continues on that direction,
+with the stop rule reset: if round 3 keeps nothing, stop and reassess with the owner before any
+further rounds.
+
 (Later rounds are appended here.)

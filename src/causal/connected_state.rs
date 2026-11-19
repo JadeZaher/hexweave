@@ -85,6 +85,8 @@ pub(super) struct State {
     pub replay: super::connected_replay::Buffer,
     /// Per-tile warm-restart state, present exactly when `options.restart` is.
     pub restarts: Option<Vec<super::connected_restart::TileRestart>>,
+    /// Per-tile visit-balance estimates, present exactly when `options.balance` is.
+    pub balance: Option<super::connected_balance::Estimate>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -116,6 +118,8 @@ struct Record {
     counters: Counters,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     restarts: Option<Vec<super::connected_restart::TileRestart>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    balance: Option<super::connected_balance::Estimate>,
 }
 
 impl AdamRecord {
@@ -151,13 +155,14 @@ impl State {
             shared_latent: None,
             bias_latent: None,
             predictor: Predictor::new(geometry, seed)?,
-            memory: Memory::new(geometry, options.memory_capacity)?,
+            memory: super::connected_balance::memory(geometry, options)?,
             gains: (0..TILES).map(|_| Gain::new()).collect(),
             baseline: (VOCAB as f32).ln(),
             counters: Counters::default(),
             ready: true,
             replay: Default::default(),
             restarts: super::connected_restart::fresh(options),
+            balance: super::connected_balance::fresh(options),
         };
         if options.precision == super::connected_precision::Precision::Fp32 {
             state.shared_latent = Some(super::connected_adam::fresh(
@@ -220,6 +225,7 @@ impl State {
             baseline: self.baseline,
             counters: self.counters.clone(),
             restarts: self.restarts.clone(),
+            balance: self.balance.clone(),
         };
         Ok(BTreeMap::from([
             ("connected.json".into(), serde_json::to_vec(&record)?),
@@ -267,34 +273,10 @@ impl State {
             ready: true,
             replay: Default::default(),
             restarts: record.restarts,
+            balance: record.balance,
         };
         state.attach_view(super::connected_precision::View::Fp32)?;
         state.validate()?;
         Ok(state)
-    }
-
-    /// The FP32 bias equals its Adam master, which steps once per anchor; before that, any prior.
-    fn validate_bias(&self) -> Result<()> {
-        let bias = self
-            .shared
-            .bias
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing connected readout bias"))?;
-        super::norm::vector(bias, VOCAB)?;
-        match &self.bias_latent {
-            Some(latent) => {
-                super::connected_adam::validate(latent, VOCAB)?;
-                ensure!(
-                    latent.weights == *bias && latent.step == self.anchors,
-                    "connected readout bias master mismatch"
-                );
-            }
-            // Finite VOCAB length is checked above; a fresh run's bias may hold its prior.
-            None => ensure!(
-                self.anchors == 0,
-                "missing connected readout bias optimizer"
-            ),
-        }
-        Ok(())
     }
 }

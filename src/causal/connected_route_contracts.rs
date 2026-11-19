@@ -57,7 +57,7 @@ fn greedy_route(state: &State, store: &mut Store, corpus: &Corpus) -> Result<[u6
         state.geometry,
         &prefix,
         state.options.visits,
-        None,
+        super::connected_route::Draw::GREEDY,
         |tile, input| {
             let retrieved =
                 state

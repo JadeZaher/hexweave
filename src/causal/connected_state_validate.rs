@@ -86,6 +86,7 @@ impl State {
         );
         super::super::connected_restart::validate(self)?;
         super::super::connected_wave::validate_state(self)?;
+        super::super::connected_balance::validate(self)?;
         self.validate_bias()?;
         self.validate_shared()
     }
@@ -142,6 +143,31 @@ impl State {
                 self.anchors == 0 && self.options.precision.is_ternary(),
                 "missing connected embedding master state"
             );
+        }
+        Ok(())
+    }
+
+    /// The FP32 bias equals its Adam master, which steps once per anchor; before that, any prior.
+    fn validate_bias(&self) -> Result<()> {
+        let bias = self
+            .shared
+            .bias
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing connected readout bias"))?;
+        super::super::norm::vector(bias, VOCAB)?;
+        match &self.bias_latent {
+            Some(latent) => {
+                super::super::connected_adam::validate(latent, VOCAB)?;
+                ensure!(
+                    latent.weights == *bias && latent.step == self.anchors,
+                    "connected readout bias master mismatch"
+                );
+            }
+            // Finite VOCAB length is checked above; a fresh run's bias may hold its prior.
+            None => ensure!(
+                self.anchors == 0,
+                "missing connected readout bias optimizer"
+            ),
         }
         Ok(())
     }

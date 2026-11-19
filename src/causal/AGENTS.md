@@ -71,6 +71,9 @@ v1-v4 checkpoints and the pre-v5.2 v5 pilots resume only under their pinned bina
 `connected.anchor_batch` (default 1, identity above 1, `anchor_exact` only) freezes
 tiles over aligned waves of that many anchors and steps each touched tile once at
 the wave end; see [anchor waves](CONNECTED.md#anchor-waves).
+Optional `connected.balance` (absent by default, identity when present; experimental) scales
+tile rates, biases training routes and reshapes memory eviction by a per-tile visit-share
+estimate kept in training state; see [visit balance](CONNECTED.md#visit-balance).
 
 Connected checkpoint completion uses `connected_completion` and frozen evaluation
 replay. It snapshots the exact named checkpoint into owned `work/inference/`

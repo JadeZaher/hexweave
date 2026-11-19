@@ -20,6 +20,8 @@ pub(super) struct Frame {
     pub knot_overflow: f32,
     /// RMS of the visit's raw output before post-visit normalization.
     pub raw_rms: f32,
+    /// The visit-balance bonus's effect on this frame's route choice; None without one.
+    pub steer: Option<super::connected_balance::Steer>,
 }
 
 pub(super) struct Trace {
@@ -63,7 +65,7 @@ pub(super) fn forward<S: TileStore>(
     geometry: Geometry,
     prefix: &Prefix,
     visits: usize,
-    mut random: Option<u64>,
+    mut draw: super::connected_route::Draw,
     mut memory: impl FnMut(usize, &[f32]) -> Result<Vec<f32>>,
 ) -> Result<Trace> {
     ensure!((1..=4).contains(&visits), "invalid connected visit bound");
@@ -73,16 +75,17 @@ pub(super) fn forward<S: TileStore>(
     let mut frames = Vec::with_capacity(visits);
     for depth in 0..visits {
         let history = memory(tile_id, &input)?;
-        let (forward, action) = store.read(tile_id, |tile| {
+        let (forward, choice) = store.read(tile_id, |tile| {
             ensure!(tile.version == versions[tile_id], "anchor tile changed");
             let forward = tile.forward(&input, &prefix.memory, &history)?;
-            let action = if depth + 1 == visits {
+            let choice = if depth + 1 == visits {
                 None
             } else {
-                Some(tile.route(&forward, &history, &mut random)?)
+                Some(draw.route(tile, &forward, &history)?)
             };
-            Ok((forward, action))
+            Ok((forward, choice))
         })?;
+        let (action, steer) = choice.map_or((None, None), |(action, steer)| (Some(action), steer));
         let next_input = forward.output.clone();
         frames.push(Frame {
             tile: tile_id,
@@ -95,6 +98,7 @@ pub(super) fn forward<S: TileStore>(
             action,
             knot_overflow: forward.knot_overflow,
             raw_rms: forward.raw_rms,
+            steer,
         });
         input = next_input;
         match destination(mesh, tile_id, action)? {

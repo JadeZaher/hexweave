@@ -15,6 +15,7 @@ mod child_io;
 mod config;
 mod connected_adam;
 mod connected_anchor;
+mod connected_balance;
 mod connected_calibration;
 mod connected_checkpoint;
 mod connected_checkpoint_io;

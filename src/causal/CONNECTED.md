@@ -904,6 +904,101 @@ and bar 1 gave 0.04-0.07 (d 0.015-0.027); lifetime means including warm-up were
 0.50-0.83, 0.32-0.75 and 0.21-0.78. The loop settles where the chase balances input
 drift, at distances well below the bar, so these dials sit below 1.
 
+### Visit balance
+
+EXPERIMENT (test F of `.omc/plans/connected-v58-update-quality-loop-2026-11-18.md`, extended):
+"learn faster where visited less", applied to the tile rate, training route choice and
+shared-memory retention. `connected.balance` = `{horizon, rate, route, memory}` (absent is
+today's behaviour and omitted from identity; present is run identity, with defaults inside the
+block omitted). Admission: `horizon` 64..=65536 (default 1024), `rate` [0, 1] (default 0),
+`route` [0, 2] (default 0), `memory` (default false); a block enabling none of the three is
+refused, and `rate > 0` or `route > 0` requires `credit_mode: anchor_exact` (the estimate counts
+live-route visits, which equal the local steps only there; under lanes the steps follow lane
+routes). `memory` is admitted in every mode. Implementation: `connected_balance.rs` (validation and report in
+`connected_balance_check.rs`).
+
+Estimate (`State.balance`, `connected_balance::Estimate`, in `connected.json`, omitted when
+absent; training-side only, never in tile bundles, never read by evaluation or completion).
+Each completed anchor folds, in `connected_step::advance` (per anchor under waves), the
+indicator "the live anchor route visited tile k" into `share[k]` with weight
+`max(1/n, 1/horizon)` for the n-th anchor: a running mean for the first `horizon` anchors, then
+an EMA of that horizon (the `TileSignal` warm start, so there is no zero-start bias). Replayed
+and lane routes are not observed. Every route enters at `START_TILE`, so its share is pinned at
+1 and says nothing about whether the router chose it; it is excluded from the ratio. With `mean`
+the average share of the other `TILES - 1` tiles, `r_k = mean / max(share_k, 1e-6)` for those
+tiles and `r = 1` for the start tile, so its rate multiplier is exactly 1 and a route to it gets
+bonus exactly 0; its share and advantage statistics are still tracked and reported. Every ratio
+is 1 (multiplier exactly 1.0, bonus exactly 0.0) until the estimate has seen `horizon` anchors,
+which removes the clamp-sized swings of the first anchors' running mean, and while the outer mean
+share is at most 1e-6 (for example when the first anchors all halted at the start tile), which
+would otherwise push every neighbour to the +2 clamp. An all-zero bonus takes the untilted route
+path bit for bit.
+
+- `rate`: every local tile step multiplies its rate by `clamp(r_k ^ rate, 1/4, 4)`
+  (exactly 1 at `rate` 0). `connected_balance::rate_factor` = `restart::factor` (floor, decay,
+  plasticity dial, Lambert law) times this multiplier, and is the one helper every tile step
+  uses (`connected_lane_apply`, restart replay, the restart report's `rate_factor`), evaluated
+  when the step is applied, so it composes with waves. The restart report's `rate_factor`
+  therefore includes the balance multiplier. When the uniform `max_update_norm` cap binds, the
+  realized step and its decay are rate-independent, so the multiplier (like any rate factor)
+  has no effect on that step. `validate_run`'s decay-safety bound uses
+  `local_rate x max(1, plasticity) x 4` whenever `rate > 0`.
+- `route`: every training-time route draw built by `connected_route::draw` (live anchor,
+  prioritized and restart replay) adds
+  `clamp(route x ln r_j, -2, 2)` to the logit of each neighbour action whose destination is
+  tile j; halt gets 0. Implemented as `p_a e^{b_a}` renormalized (equal to the softmax of the
+  adjusted logits), then sampled with the pass's generator or, under greedy training routes,
+  argmax. The route update credits the action taken but its score-function gradient uses the
+  model's own unadjusted policy (`routing::policy` recomputes it), so the update is off-policy:
+  a biased gradient whose bias is bounded by the ±2 logit clamp (at most a factor e^4 between
+  two actions' sampling odds) and not corrected by importance weights. Lane draws
+  (`connected_route::lane`) are never tilted, by construction: evaluation and completion replay
+  reuse the lane path, so a relaxed admission rule still could not tilt them; evaluation's own
+  anchor forward passes `Draw::GREEDY`.
+- `memory`: when the FIFO is full, `Memory::publish` evicts the oldest record of the tile
+  holding the most records (ties: the globally oldest of those) instead of the globally oldest
+  (`Memory.balanced`, serialized only when true). Removal from the middle keeps the vector in
+  publication order, so the epoch-monotonicity checks, `query`/`query_before` eligibility (a
+  per-record test), `forget(tile)` and the publication counters are unchanged. Evaluation and
+  completion build their isolated memory through the same `connected_balance::memory`, so they
+  use balanced eviction exactly when training does.
+
+Limits of `memory`: a training read accepts only records whose shared revision lags by at most
+one anchor (`eligible`) and that are at most 64 epochs old. With `anchor_exact` credit, four
+visits and capacity 32, eviction never reaches the current or previous anchor's at most eight
+records, so the policy changes which stale records are kept but not what training retrieves; the
+flow test asserts the same routes and losses with different held records. It can matter in training only when one or two anchors
+publish more than the capacity (lanes or hybrid credit), and in evaluation and completion, where
+the shared revision is frozen and every record within 64 epochs is eligible. So a `memory: true`
+arm mostly changes how it is scored, not how it trains. Balanced eviction counts every held
+record, eligible or not, so under lanes it can evict a still-eligible record of a tile that holds
+many stale ones and reduce usable retrieval. Under `anchor_exact` it does not affect
+training at all, only evaluation scoring, so it must not be used in a pilot whose held-out scores
+are compared with runs without it.
+
+Reporting (log rows and the report, `balance`): per tile `visit_share`, `rate_multiplier`,
+`route_bonus` (the current per-destination bonus, null without `route`), lifetime
+`route_decisions` (live-anchor decisions under a nonzero bonus) and `route_changed` (those whose
+adjusted argmax differs from the unadjusted one: for greedy routes, choices the bonus changed; in
+sampled mode a proxy) and `route_bonus_mean` (mean absolute neighbour bonus per decision), and `memory_records` held.
+The estimate also keeps, with the same horizon and warm start, an average of the anchor
+advantage `loss - baseline` (the baseline before `advance` updates it, as the route update uses)
+over anchors that visited the tile (`advantage_visited`, 0 until a visit) and over those that did
+not (`advantage_unvisited`); `worth` = unvisited minus visited (positive: anchors through the
+tile do better), null until both sides have a sample (always for the start tile, which is never
+unvisited). This is a correlational estimate, not an
+ablation: the model chooses its routes, so visited and unvisited anchors differ in content.
+
+Fixture magnitudes (`the cat sat on the mat.`, 80 anchors, horizon 64, so 16 live anchors after
+warm-up, debug build): `rate` 1 gave outer-tile multipliers 0.83-1.35 (outer shares 0.18-0.30) and
+exactly 1 on the start tile; it changed E and the tiles, though the summed fixture loss over those
+16 anchors matched the run without balance to every printed digit. `route` 2 under greedy routes
+gave outer bonuses −0.51 to 0.89 (0 towards the centre), a mean absolute bonus of 0.33-0.80 per
+tilted decision, changed 23 of 45 tilted live-anchor decisions and lowered the largest outer
+tile's share of outer visits from 0.32 to 0.21. Untested: `memory` under lanes, hybrid and
+anchor-predicted credit (the flow test runs in both the 7- and 19-tile builds),
+`route` under prioritized or restart replay, and any quality effect.
+
 ## Persistence and measurements
 
 The store retains slot metadata and at most `resident_tiles` (default `workers`,

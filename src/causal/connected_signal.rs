@@ -67,6 +67,9 @@ pub(super) struct Memory {
     pub observed: u64,
     pub predicted: u64,
     pub self_generated: u64,
+    /// Full-memory eviction takes the busiest tile's oldest record (CONNECTED.md §Visit balance).
+    #[serde(default, skip_serializing_if = "super::connected_balance::is_false")]
+    pub balanced: bool,
 }
 
 impl Memory {
@@ -84,6 +87,7 @@ impl Memory {
             observed: 0,
             predicted: 0,
             self_generated: 0,
+            balanced: false,
         })
     }
 
@@ -131,7 +135,8 @@ impl Memory {
         self.records
             .retain(|r| record.epoch.saturating_sub(r.epoch) <= MEMORY_AGE);
         if self.records.len() == self.capacity {
-            self.records.remove(0);
+            let oldest = super::connected_balance::evict(&self.records, self.balanced);
+            self.records.remove(oldest);
         }
         self.records.push(record);
         Ok(())

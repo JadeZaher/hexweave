@@ -99,6 +99,9 @@ pub(super) struct Options {
     /// Per-tile local-rate floor and change-driven warm restarts; absent is off (CONNECTED.md).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart: Option<Restart>,
+    /// Visit-share balance of tile rate, training routes and memory (CONNECTED.md §Visit balance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<super::connected_balance::Balance>,
 }
 
 /// Bounded prioritized replay: buffer `capacity` and replayed anchors `per_anchor`.
@@ -139,6 +142,7 @@ impl Default for Options {
             history: true,
             replay: None,
             restart: None,
+            balance: None,
         }
     }
 }
@@ -192,9 +196,9 @@ impl Options {
             self.local_decay.factor(u64::MAX) > 0.0,
             "connected local_decay must keep the local rate positive"
         );
-        if let Some(restart) = self.restart {
-            restart.validate()?;
-        }
+        self.restart.map_or(Ok(()), |restart| restart.validate())?;
+        self.balance
+            .map_or(Ok(()), |balance| balance.validate(self.credit_mode))?;
         self.validate_paging_and_replay()
     }
 
@@ -259,7 +263,10 @@ impl Options {
         // A tile step's realized multiplier never exceeds gain_max, so every decay keeps a master.
         // max() is future-proofing: within current ranges only `rate` can trip this bound.
         let plasticity = self.restart.map_or(1.0, |restart| restart.max_plasticity());
-        let rate = config.rate.max(self.local_rate * plasticity.max(1.0));
+        let multiplier = super::connected_balance::max_multiplier(self);
+        let rate = config
+            .rate
+            .max(self.local_rate * plasticity.max(1.0) * multiplier);
         ensure!(
             self.weight_decay * rate * f64::from(self.gain_max) < 1.0,
             "connected weight_decay * max(rate, local_rate) * gain_max must be below 1"

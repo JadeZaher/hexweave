@@ -79,6 +79,9 @@ pub(super) fn run(config: &Config) -> Result<Value> {
     if let Some(restart) = super::connected_restart::report(&state)? {
         report["restart"] = restart;
     }
+    if let Some(balance) = super::connected_balance::report(&state)? {
+        report["balance"] = balance;
+    }
     // Lifetime means in the report; log rows carry interval means.
     log::add_scale(&mut report, &state, &Default::default(), state.anchors);
     super::core_checkpoint::publish(

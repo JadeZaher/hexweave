@@ -110,13 +110,13 @@ pub(super) fn forward<S: TrainingSource>(
     let bytes = source.pending_prefix(&state.cursor)?;
     let prefix = state.shared.prefix(&bytes)?;
     let random = tuning::hash(state.seed, &[state.anchors, 0x414e4348]);
-    let random = super::connected_route::random(&options, state.seed, &[state.anchors], random);
+    let draw = super::connected_route::draw(&options, state, &[state.anchors], random);
     let trace = connected_anchor::forward(
         store,
         state.geometry,
         &prefix,
         options.visits,
-        random,
+        draw,
         |tile, input| {
             state.counters.memory_reads += 1;
             let retrieved =
@@ -136,6 +136,7 @@ pub(super) struct Tally {
     /// Mean and maximum raw visit RMS.
     visit: (f64, f64),
     knot_overflow: f64,
+    route: super::connected_balance::Visit,
 }
 
 impl Tally {
@@ -148,6 +149,7 @@ impl Tally {
             output_rms: credit.output_rms,
             visit,
             knot_overflow: trace.knot_overflow(),
+            route: super::connected_balance::Visit::of(trace),
         })
     }
 }
@@ -194,6 +196,7 @@ pub(super) fn advance<S: TrainingSource>(
     counters.visit_rms_sum += tally.visit.0;
     counters.visit_rms_max = counters.visit_rms_max.max(tally.visit.1);
     counters.knot_overflow_sum += tally.knot_overflow;
+    super::connected_balance::observe(state, &tally.route, tally.loss)?;
     state.baseline = 0.9 * state.baseline + 0.1 * tally.loss;
     Ok(())
 }

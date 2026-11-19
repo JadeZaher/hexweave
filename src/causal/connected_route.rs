@@ -1,8 +1,13 @@
 //! Training-time route selection: sampled, or greedy with per-anchor exploration; see
 //! CONNECTED.md §Greedy training routes.
 
+use super::connected_balance::{self as balance, Steer};
 use super::connected_config::Options;
 use super::connected_state::State;
+use super::execution::destination;
+use super::geometry::TILES;
+use super::routing;
+use super::tile::{Forward, Tile};
 use super::tuning;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -55,13 +60,70 @@ pub(super) fn random(options: &Options, seed: u64, key: &[u64], random: u64) -> 
     (draw < options.route_explore).then_some(random)
 }
 
-/// A lane job's route RNG; lanes share the live anchor's exploration decision (key `[anchors]`).
-pub(super) fn lane(options: &Options, state: &State, index: usize, depth: usize) -> Option<u64> {
+/// A lane job's route draw, never tilted by a balance bonus (lane draws also serve evaluation);
+/// lanes share the live anchor's exploration decision (key `[anchors]`).
+pub(super) fn lane(options: &Options, state: &State, index: usize, depth: usize) -> Draw {
     let words = [state.anchors, index as u64, depth as u64, 0x4c4f4341];
-    random(
-        options,
-        state.seed,
-        &[state.anchors],
-        tuning::hash(state.seed, &words),
-    )
+    let seed = tuning::hash(state.seed, &words);
+    Draw {
+        random: random(options, state.seed, &[state.anchors], seed),
+        bonus: None,
+    }
+}
+
+/// One training pass's route draw: `random`'s choice plus any visit-balance bonus.
+pub(super) fn draw(options: &Options, state: &State, key: &[u64], seed: u64) -> Draw {
+    Draw {
+        random: random(options, state.seed, key, seed),
+        bonus: balance::bonus(options, state.balance.as_ref()),
+    }
+}
+
+/// A pass's route choice: RNG (`None` is argmax) and per-destination-tile logit bonus.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Draw {
+    pub random: Option<u64>,
+    pub bonus: Option<[f32; TILES]>,
+}
+
+impl Draw {
+    /// Evaluation and completion: argmax of the unadjusted policy.
+    pub const GREEDY: Self = Self {
+        random: None,
+        bonus: None,
+    };
+
+    /// Chooses an action, each neighbour's logit raised by its destination's bonus when present.
+    pub fn route(
+        &mut self,
+        tile: &Tile,
+        forward: &Forward,
+        history: &[f32],
+    ) -> Result<(usize, Option<Steer>)> {
+        // An all-zero bonus (warm-up, neutral estimate) takes the untilted path bit for bit.
+        let Some(bonus) = self
+            .bonus
+            .filter(|bonus| bonus.iter().any(|&value| value != 0.0))
+        else {
+            return Ok((tile.route(forward, history, &mut self.random)?, None));
+        };
+        let policy = tile.route_probabilities(forward, history)?;
+        let mesh = super::geometry::mesh();
+        let (mut adjusted, mut magnitude, mut neighbours) = (policy.clone(), 0.0f32, 0u16);
+        for (action, probability) in adjusted.iter_mut().enumerate() {
+            if let Some(next) = destination(mesh, tile.id, Some(action))? {
+                // p e^b is softmax(logit + b) before renormalization.
+                *probability *= bonus[next].exp();
+                magnitude += bonus[next].abs();
+                neighbours += 1;
+            }
+        }
+        let total: f32 = adjusted.iter().sum();
+        adjusted.iter_mut().for_each(|p| *p /= total);
+        let plain = routing::choose(&policy, &mut None)?;
+        let changed = routing::choose(&adjusted, &mut None)? != plain;
+        let action = routing::choose(&adjusted, &mut self.random)?;
+        let bonus = magnitude / f32::from(neighbours.max(1));
+        Ok((action, Some(Steer { changed, bonus })))
+    }
 }

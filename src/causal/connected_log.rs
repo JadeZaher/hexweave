@@ -84,6 +84,9 @@ impl Log {
         if let Some(restart) = super::super::connected_restart::report(state)? {
             line["restart"] = restart;
         }
+        if let Some(balance) = super::super::connected_balance::report(state)? {
+            line["balance"] = balance;
+        }
         add_scale(&mut line, state, &self.previous, interval_anchors);
         add_waves(&mut line, state, &self.previous);
         if let Some(prior) = self.readout_prior.take() {

@@ -3,7 +3,6 @@
 
 use super::connected_lane_apply::{record, update_tile, Accumulator};
 use super::connected_replay::replay_salted;
-use super::connected_restart::factor;
 use super::connected_state::State;
 use super::connected_store::Store;
 use super::execution::TrainingSource;
@@ -36,7 +35,7 @@ pub(super) fn run<S: TrainingSource>(
                 let options = state.options;
                 // The fresh clock (origin = anchors) gives the full post-restart rate.
                 let rate = options.local_rate
-                    * factor(&options, state.restarts.as_deref(), state.anchors, tile)?;
+                    * super::connected_balance::rate_factor(&options, state, tile)?;
                 let update = update_tile(store, tile, &mean, rate, 1.0, &options)?;
                 record(&mut state.counters, tile, &update);
                 true

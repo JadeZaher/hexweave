@@ -106,7 +106,7 @@ impl Accumulator {
             };
             // `anchors` counts completed anchors, so during this lane phase it is the anchor's index.
             restart::observe_gradient(state, tile, &mean);
-            let factor = restart::factor(options, state.restarts.as_deref(), state.anchors, tile)?;
+            let factor = super::connected_balance::rate_factor(options, state, tile)?;
             let rate = options.local_rate * factor;
             let update = update_tile(store, tile, &mean, rate, gain, options)?;
             record(&mut state.counters, tile, &update);

@@ -94,6 +94,14 @@ and the **per-tile signal** that will trigger splits. Until then both are placeh
   - a minimum gap between splits lets the router and both children settle before the next one.
   The exact signal comes from the prerequisite pilots (candidates: plasticity that stays high,
   gradient size that does not settle, visit share). All three are already logged per tile.
+- **Every tile earns its place (owner principle, 2026-11-18).** Tiles need not be used equally,
+  but each must have a reason to be there. The counterpart of splitting is retiring: a tile whose
+  measured worth stays at or below zero for a sustained window, despite the balance mechanisms
+  (visit-compensated rate, route bonus, memory retention) having had time to act, is a candidate
+  to be removed and its slot returned to the padding. Worth is first estimated from the per-tile
+  advantage statistics logged by `connected.balance`; because that estimate is correlational, a
+  retire decision must be confirmed by an ablation (held-out loss with the tile's routes masked)
+  before weights are dropped. Retiring is specified here and not yet designed in detail.
 - **Arms:** start at 7 tiles with capacity 19, against Phase 1 arm C (19 from the start) and arm A
   (7 fixed). A capacity-37 arm follows only if this gate passes.
 - **Measures:** held-out immediately before and after each split; anchors until the two children's

@@ -2,7 +2,8 @@
 
 use super::super::connected_anchor::{self, Trace};
 use super::super::connected_decode::{self, Options};
-use super::super::connected_signal::{Kind, Memory, Record};
+use super::super::connected_route::Draw;
+use super::super::connected_signal::{Kind, Record};
 use super::super::connected_state::State;
 use super::super::connected_store::Store;
 use super::super::core_corpus::END;
@@ -22,7 +23,8 @@ impl<'a> Replay<'a> {
         super::super::tuning::set_slice_mode(state.options.slice_mode);
         let mut scratch = State::restore(&state.payloads()?, state.geometry, state.seed)?;
         scratch.attach_view(store.view)?;
-        scratch.memory = Memory::new(state.geometry, state.options.memory_capacity)?;
+        // Same eviction policy as training (CONNECTED.md §Visit balance).
+        scratch.memory = super::super::connected_balance::memory(state.geometry, &state.options)?;
         scratch.epoch = 0;
         Ok(Self {
             state: scratch,
@@ -64,7 +66,7 @@ impl<'a> Replay<'a> {
             state.geometry,
             prefix,
             state.options.visits,
-            None,
+            Draw::GREEDY,
             |tile, input| {
                 let retrieved =
                     state

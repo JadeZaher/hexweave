@@ -21,7 +21,7 @@ pub(super) struct Job {
     pub revision: u64,
     pub shared_revision: u64,
     pub gain: f32,
-    pub random: Option<u64>,
+    pub draw: super::super::connected_route::Draw,
 }
 
 pub(super) struct Outcome {
@@ -48,7 +48,7 @@ fn execute(
     let features = predictor.features(&job.input, &forward.output, &job.history, label, tile.id)?;
     let correction = predictor.predict(&features, tile.id)?;
     let action = if job.depth + 1 < options.visits {
-        Some(tile.route(&forward, &job.history, &mut { job.random })?)
+        Some({ job.draw }.route(tile, &forward, &job.history)?.0)
     } else {
         None
     };

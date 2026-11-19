@@ -105,6 +105,11 @@ impl Tile {
         history: &[f32],
         random: &mut Option<u64>,
     ) -> Result<usize> {
+        routing::choose(&self.route_probabilities(forward, history)?, random)
+    }
+
+    /// The route policy over neighbour-then-halt actions, halt removed under `no_halt`.
+    pub fn route_probabilities(&self, forward: &Forward, history: &[f32]) -> Result<Vec<f32>> {
         let mut probabilities =
             routing::probabilities(self, &forward.output, &forward.heads, history)?;
         if super::tuning::current().no_halt {
@@ -113,7 +118,7 @@ impl Tile {
             let total: f32 = probabilities.iter().sum();
             probabilities.iter_mut().for_each(|p| *p /= total);
         }
-        routing::choose(&probabilities, random)
+        Ok(probabilities)
     }
 
     /// Replay one frozen frame; prefix and parameter sinks select the anchor phase.
