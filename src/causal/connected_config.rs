@@ -102,6 +102,12 @@ pub(super) struct Options {
     /// Visit-share balance of tile rate, training routes and memory (CONNECTED.md §Visit balance).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<super::connected_balance::Balance>,
+    /// Largest shared-revision lag a training memory read admits, 1..=64 (CONNECTED.md §Memory reach).
+    #[serde(skip_serializing_if = "super::connected_reach::is_unit_lag")]
+    pub memory_lag: u64,
+    /// Post-visit RMS normalization of the residual stream (CONNECTED.md §v4); default on.
+    #[serde(skip_serializing_if = "is_true")]
+    pub visit_norm: bool,
 }
 
 /// Bounded prioritized replay: buffer `capacity` and replayed anchors `per_anchor`.
@@ -143,6 +149,8 @@ impl Default for Options {
             replay: None,
             restart: None,
             balance: None,
+            memory_lag: 1,
+            visit_norm: true,
         }
     }
 }
@@ -197,6 +205,7 @@ impl Options {
             "connected local_decay must keep the local rate positive"
         );
         self.restart.map_or(Ok(()), |restart| restart.validate())?;
+        super::connected_reach::validate(self)?;
         self.balance
             .map_or(Ok(()), |balance| balance.validate(self.credit_mode))?;
         self.validate_paging_and_replay()
@@ -246,15 +255,6 @@ impl Options {
     /// The decoded-bundle residency cap the store enforces.
     pub fn resident(&self) -> usize {
         self.resident_tiles.unwrap_or(self.workers)
-    }
-
-    /// The tile history input: retrieved memory, or zeros of its width under the ablation.
-    pub fn history_input(&self, retrieved: Vec<f32>) -> Vec<f32> {
-        if self.history {
-            retrieved
-        } else {
-            vec![0.0; retrieved.len()]
-        }
     }
 
     pub fn validate_run(&self, config: &Config) -> Result<()> {

@@ -103,7 +103,7 @@ pub(super) fn step<S: TrainingSource>(
     );
     store.quiescent()?;
     source.validate(&state.cursor)?;
-    tuning::set_slice_mode(options.slice_mode);
+    tuning::set_connected(&options);
     state.ready = false;
     // Waves cover anchors [k b, (k + 1) b), so numerics depend only on the anchor index.
     let result = wave(

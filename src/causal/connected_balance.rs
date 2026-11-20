@@ -150,6 +150,7 @@ pub(super) fn fresh(options: &Options) -> Option<Estimate> {
 pub(super) fn memory(geometry: Geometry, options: &Options) -> Result<Memory> {
     let mut memory = Memory::new(geometry, options.memory_capacity)?;
     memory.balanced = options.balance.is_some_and(|balance| balance.memory);
+    memory.lag = options.memory_lag;
     Ok(memory)
 }
 

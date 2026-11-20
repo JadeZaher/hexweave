@@ -111,7 +111,8 @@ observed corrections, predicted corrections and generated-byte observations.
 Only observed actual corrections may fit the predictor or calibrate gains.
 
 Retrieval rejects future records, event age over 64, source-tile revision lag
-over eight, or embedding Adam revision lag over one. Packed-trit versions alone
+over eight, or embedding Adam revision lag over `connected.memory_lag` (default one;
+see [memory reach](#memory-reach-and-visit-normalization-switches)). Packed-trit versions alone
 are insufficient because latent weights can change without changing a trit.
 For eligible records its weight is
 
@@ -299,7 +300,9 @@ design statements, not evidence that v3 trains better.
 
 ## Residual normalization and readout prior (v4)
 
-Protocol v4 adds two behaviors, neither with a configuration option. Under the
+Protocol v4 adds two behaviors, neither with a configuration option (the normalization later
+became switchable through `connected.visit_norm`; see
+[memory reach and visit normalization](#memory-reach-and-visit-normalization-switches)). Under the
 connected protocol each tile's output, the residual sum of its attention and FFN
 branches, is RMS-normalized before it leaves the visit (post-visit RMS
 normalization of the residual stream). This is the existing `norm::rms`, an
@@ -590,7 +593,7 @@ same weights: forward with route sampling seeded by (seed, anchor, position), th
 replayed position as both the shared revision and the cutoff, so a replay sees only
 records published by anchors strictly before it. Records from that anchor onward
 carry corrections derived from its own or later targets; reading them would leak
-the label. With the usual eligibility (shared lag at most one) and capacity, a
+the label. With the default eligibility (shared lag at most one, `memory_lag` 1) and capacity, a
 replay therefore sees at most the previous anchor's surviving records and usually
 none: replayed anchors generally run with zero history, a distribution mismatch
 against live anchors that read the newest memory. Their per-frame tile gradients join the live anchor's
@@ -963,8 +966,11 @@ path bit for bit.
   completion build their isolated memory through the same `connected_balance::memory`, so they
   use balanced eviction exactly when training does.
 
-Limits of `memory`: a training read accepts only records whose shared revision lags by at most
-one anchor (`eligible`) and that are at most 64 epochs old. With `anchor_exact` credit, four
+Limits of `memory` (at the default `memory_lag` of 1; a larger lag lets eviction change what
+anchor-exact training reads, see
+[memory reach](#memory-reach-and-visit-normalization-switches)): a training read accepts only
+records whose shared revision lags by at most one anchor (`eligible`) and that are at most 64
+epochs old. With `anchor_exact` credit, four
 visits and capacity 32, eviction never reaches the current or previous anchor's at most eight
 records, so the policy changes which stale records are kept but not what training retrieves; the
 flow test asserts the same routes and losses with different held records. It can matter in training only when one or two anchors
@@ -998,6 +1004,67 @@ tilted decision, changed 23 of 45 tilted live-anchor decisions and lowered the l
 tile's share of outer visits from 0.32 to 0.21. Untested: `memory` under lanes, hybrid and
 anchor-predicted credit (the flow test runs in both the 7- and 19-tile builds),
 `route` under prioritized or restart replay, and any quality effect.
+
+### Memory reach and visit normalization switches
+
+EXPERIMENT (`.omc/plans/connected-v58-update-quality-loop-2026-11-18.md`, differences 5 and 6):
+two switches for the last untested differences from the reference path. Both are omitted from
+identity and serialization at their defaults, so existing configs, checkpoints and the golden
+trajectories are unchanged; a non-default value is run identity.
+
+`connected.memory_lag` (1..=64, default 1) is the largest shared-revision lag a memory read
+admits (`connected_retrieval::eligible`, `Memory.lag`, serialized only when not 1 and checked
+against the options by state validation). Every reader goes through the one `Memory`: the live
+anchor (`connected_reach::anchor_read`), lanes, prioritized and restart replay (`query_before`)
+and frozen evaluation/completion replay, whose memory `connected_balance::memory` builds from
+the checkpointed options.
+
+Causality does not depend on the lag. A record's shared revision is fixed at publication: an
+observed record carries the index of the anchor whose label produced it; a lane (predicted)
+record carries E's Adam step after that anchor's E step, its index plus one. A record's shared
+revision is therefore never below the index of the label it derives from. A replay of position
+`p` admits only shared revisions strictly below `p` (`query_before`'s cutoff), so only labels of
+earlier anchors; the lag only lowers the floor to `p - memory_lag`. A live anchor reads during
+its forward pass, before its own gather and publication, so memory then holds only records of
+earlier anchors (its lag-0 records are the previous anchor's lane records). Evaluation and
+completion freeze the shared revision, so every record there has lag 0 and `memory_lag` does
+not change them: they already read every record within 64 epochs, the train/evaluation read
+mismatch that a larger lag narrows.
+
+Effective reach. The lag is one of four limits, and the other three are unchanged:
+- Event age 64 epochs: one epoch per published record, so about 16 anchors at four visits per
+  anchor (fewer under lanes, which also publish predicted records).
+- Capacity (default 32, at most 64): FIFO keeps about 8 anchors at four records per anchor, 16
+  at capacity 64. At the default capacity a lag above about 8 has no effect.
+- Source-tile revision lag 8: a tile that both routes and takes a local step commits twice per
+  anchor, so the always-visited start tile's records expire after 4 anchors whatever the lag; a
+  rarely visited tile's records are bounded by the other limits instead.
+- `balance.memory`: at lag 1 it changes only which stale records are held; with a larger lag
+  those records become readable, so balanced eviction changes anchor-exact training too.
+
+Logs carry `memory_reach` per row: `memory_lag`, `reads` (live training-anchor reads in the
+interval), `records_per_read`, `mean_lag` (mean shared-revision lag of the averaged records) and
+`session_lag_max`; the report carries session totals. The tally (`State.reach`) is session-only,
+so a resumed run restarts it; lane, replay and evaluation reads are not counted.
+
+`connected.visit_norm` (default true) gates v4's post-visit RMS normalization. It is a `Knobs`
+field (serialized only when false) set from the options by `Config::knobs`, and by
+`tuning::set_connected` at every training step, wave and frozen replay, so evaluation and
+completion use the checkpoint's setting whatever the thread held. Off, `tile_cache` keeps no
+`output_norm`: the visible output is the raw residual sum, `raw_adjoint` is the identity and
+`raw_rms` is measured, in the one cache every forward, gather, local backward and lane uses, so
+forward and reverse stay consistent (the central-difference row in `connected_curve_contracts`).
+The readout, routing and predictor features RMS-normalize their own inputs and are unchanged;
+the returned correction scales with the inverse RMS at the readout, as before v4. The 1e3 visit
+bound still applies, now to the stream itself: a run whose stream outgrows it stops with an
+error rather than being stabilized. Tile bundles and the paged store hold no setting.
+
+Fixture magnitudes (debug build, two visits, anchor-exact FP32, 48 anchors): without
+normalization raw visit RMS stays near 1 (interval mean 1.008, maximum 1.10, against 1.007 and
+1.12 with it), losses differ only in the third decimal and neither arm's loss falls, so the
+fixture shows neither divergence nor benefit. Untested: whether the stream grows over a long run
+without normalization (the v3 pilot's alignment growth is the risk), any quality effect of either
+switch, and `memory_lag` under lanes, hybrid or waves.
 
 ## Persistence and measurements
 

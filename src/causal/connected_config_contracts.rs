@@ -52,6 +52,8 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("resident_tiles", json!(TILES)),
         ("route_training", json!("sampled")),
         ("route_explore", json!(0.0)),
+        ("memory_lag", json!(1)),
+        ("visit_norm", json!(true)),
     ] {
         let mut same = base.clone();
         same["connected"][key] = value;
@@ -103,6 +105,8 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
             "restart",
             json!({"floor":0.1,"threshold":0.5,"signal":"tile","law":"lambert"}),
         ),
+        ("memory_lag", json!(64)),
+        ("visit_norm", json!(false)),
     ] {
         let mut changed = base.clone();
         changed["connected"][key] = value;
@@ -137,6 +141,8 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("resident_tiles", json!(3)),
         ("resident_tiles", json!(TILES + 1)),
         ("route_explore", json!(0.25)),
+        ("memory_lag", json!(0)),
+        ("memory_lag", json!(65)),
         ("replay", json!({"capacity":64,"per_anchor":2})),
         ("restart", json!({"floor":-0.1})),
         ("restart", json!({"floor":1.5})),

@@ -16,6 +16,7 @@ mod retention;
 pub(super) struct Log {
     file: File,
     previous: Counters,
+    previous_reach: super::super::connected_reach::Reach,
     previous_anchors: u64,
     previous_seconds: f64,
     initial_anchors: u64,
@@ -35,6 +36,7 @@ impl Log {
         Self {
             file,
             previous: state.counters.clone(),
+            previous_reach: state.reach,
             previous_anchors: state.anchors,
             previous_seconds: 0.0,
             initial_anchors: state.anchors,
@@ -77,6 +79,7 @@ impl Log {
             "eval": eval, "mechanism": current, "paging": store.stats(),
             "gains": gains(state, store), "trust": trust(state),
             "memory_records": state.memory.records.len(),
+            "memory_reach": state.reach.report(&self.previous_reach, state.options.memory_lag),
         });
         if state.options.replay.is_some() {
             line["replay"] = state.replay.report();
@@ -95,6 +98,7 @@ impl Log {
         writeln!(self.file, "{line}")?;
         self.file.flush()?;
         self.previous = current.clone();
+        self.previous_reach = state.reach;
         self.previous_anchors = state.anchors;
         self.previous_seconds = seconds;
         Ok(())

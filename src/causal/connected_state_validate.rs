@@ -25,7 +25,8 @@ impl State {
         self.memory.validate()?;
         ensure!(
             self.memory.geometry == self.geometry
-                && self.memory.capacity == self.options.memory_capacity,
+                && self.memory.capacity == self.options.memory_capacity
+                && self.memory.lag == self.options.memory_lag,
             "connected memory geometry/options mismatch"
         );
         for gain in &self.gains {

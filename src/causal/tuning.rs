@@ -57,6 +57,9 @@ pub(super) struct Knobs {
     pub connected_fp32: bool,
     #[serde(skip_serializing_if = "super::connected_config::SliceMode::is_default")]
     pub slice_mode: super::connected_config::SliceMode,
+    /// Post-visit RMS normalization when `connected`; false is `connected.visit_norm: false`.
+    #[serde(skip_serializing_if = "is_true")]
+    pub visit_norm: bool,
 }
 
 impl Knobs {
@@ -82,6 +85,7 @@ impl Knobs {
         connected: false,
         connected_fp32: false,
         slice_mode: super::connected_config::SliceMode::Full,
+        visit_norm: true,
     };
 
     /// Core path (causal-latent-v1): latent Adam on tiles and E, greedy routes, pinned forward.
@@ -163,11 +167,12 @@ pub(super) fn scoped(knobs: Knobs) -> Scoped {
     Scoped
 }
 
-/// Switch connected slice mode only, keeping latents and draws.
-pub(super) fn set_slice_mode(slice_mode: super::connected_config::SliceMode) {
+/// Switch connected slice mode and visit normalization to `options`, keeping latents and draws.
+pub(super) fn set_connected(options: &super::connected_config::Options) {
     KNOBS.with(|cell| {
         cell.set(Knobs {
-            slice_mode,
+            slice_mode: options.slice_mode,
+            visit_norm: options.visit_norm,
             ..cell.get()
         })
     });

@@ -19,9 +19,9 @@ pub(super) struct Tile {
 }
 
 pub(super) struct Forward {
-    /// Next state; RMS 1 under `connected` (post-visit normalization), raw otherwise.
+    /// Next state; RMS 1 under connected `visit_norm` (post-visit normalization), raw otherwise.
     pub output: Vec<f32>,
-    /// RMS of the raw output before post-visit normalization (`1/inverse` under `connected`).
+    /// RMS of the raw output before post-visit normalization (`1/inverse` when normalized).
     pub raw_rms: f32,
     #[allow(dead_code)]
     pub latent: Vec<f32>,
@@ -228,7 +228,7 @@ impl Tile {
         Ok(transitions)
     }
 
-    /// Attention, gated FFN, gain/shift, then post-visit RMS normalization (connected only).
+    /// Attention, gated FFN, gain/shift, then post-visit RMS normalization (connected `visit_norm`).
     fn cache(&self, input: &[f32], memory: &[f32], history: &[f32]) -> Result<Cache> {
         let d = self.geometry.width;
         norm::vector(input, d)?;
@@ -267,7 +267,7 @@ impl Tile {
             .map(|(j, u)| u + 0.25 * (pulse.gain(j) * ffn.output[j] + pulse.shift(j, d)))
             .collect();
         norm::finite(&output)?;
-        let output_norm = if knobs.connected {
+        let output_norm = if knobs.connected && knobs.visit_norm {
             Some(norm::rms(&output)?)
         } else {
             None

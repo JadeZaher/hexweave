@@ -11,19 +11,19 @@ pub(super) struct Cache {
     pub(super) pulse: pulse::Cache,
     /// Raw residual-stream output of the visit.
     pub(super) output: Vec<f32>,
-    /// Post-visit RMS normalization of the residual stream; Some only under `connected`.
+    /// Post-visit RMS normalization of the residual stream; Some only under connected `visit_norm`.
     pub(super) output_norm: Option<norm::Rms>,
 }
 
 impl Cache {
-    /// The output a visit exposes: RMS-normalized under `connected`, raw otherwise.
+    /// The output a visit exposes: RMS-normalized under connected `visit_norm`, raw otherwise.
     pub(super) fn visible(&self) -> &[f32] {
         self.output_norm
             .as_ref()
             .map_or(&self.output, |rms| &rms.values)
     }
 
-    /// RMS of the raw output: the normalization's `1/inverse` under `connected`, else measured.
+    /// RMS of the raw output: the normalization's `1/inverse` when normalized, else measured.
     pub(super) fn raw_rms(&self) -> f32 {
         match &self.output_norm {
             Some(rms) => rms.inverse.recip(),

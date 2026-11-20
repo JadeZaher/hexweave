@@ -73,6 +73,7 @@ pub(super) fn run(config: &Config) -> Result<Value> {
         "memory_records": state.memory.records.len(), "predictor_fits": state.predictor.fits,
     });
     log::add_waves(&mut report, &state, &Default::default());
+    report["memory_reach"] = state.reach.report(&Default::default(), options.memory_lag);
     if options.replay.is_some() {
         report["replay"] = state.replay.report();
     }

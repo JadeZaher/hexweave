@@ -31,7 +31,7 @@ pub(super) fn step<S: TrainingSource>(
     );
     store.quiescent()?;
     source.validate(&state.cursor)?;
-    tuning::set_slice_mode(options.slice_mode);
+    tuning::set_connected(&options);
     state.ready = false;
     let mark = Mark::of(state);
     // Restarts run once the anchor's updates are all committed (CONNECTED.md §Warm restarts).
@@ -117,14 +117,7 @@ pub(super) fn forward<S: TrainingSource>(
         &prefix,
         options.visits,
         draw,
-        |tile, input| {
-            state.counters.memory_reads += 1;
-            let retrieved =
-                state
-                    .memory
-                    .query(input, tile, state.epoch, revisions, state.anchors)?;
-            Ok(options.history_input(retrieved))
-        },
+        |tile, input| super::connected_reach::anchor_read(state, input, tile, revisions, &options),
     )?;
     Ok((bytes, prefix, trace))
 }

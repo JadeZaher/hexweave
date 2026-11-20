@@ -83,6 +83,8 @@ pub(super) struct State {
     pub ready: bool,
     /// Session-only prioritized replay buffer; never checkpointed (CONNECTED.md §Replay).
     pub replay: super::connected_replay::Buffer,
+    /// Session-only live memory-read tally for the logs (CONNECTED.md §Memory reach).
+    pub reach: super::connected_reach::Reach,
     /// Per-tile warm-restart state, present exactly when `options.restart` is.
     pub restarts: Option<Vec<super::connected_restart::TileRestart>>,
     /// Per-tile visit-balance estimates, present exactly when `options.balance` is.
@@ -161,6 +163,7 @@ impl State {
             counters: Counters::default(),
             ready: true,
             replay: Default::default(),
+            reach: Default::default(),
             restarts: super::connected_restart::fresh(options),
             balance: super::connected_balance::fresh(options),
         };
@@ -272,6 +275,7 @@ impl State {
             counters: record.counters,
             ready: true,
             replay: Default::default(),
+            reach: Default::default(),
             restarts: record.restarts,
             balance: record.balance,
         };

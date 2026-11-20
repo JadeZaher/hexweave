@@ -163,6 +163,7 @@ impl Config {
             slice_mode: self
                 .connected
                 .map_or(super::connected_config::SliceMode::Full, |o| o.slice_mode),
+            visit_norm: self.connected.is_none_or(|o| o.visit_norm),
             ..Knobs::core(self.rate, self.seed)
         }
     }

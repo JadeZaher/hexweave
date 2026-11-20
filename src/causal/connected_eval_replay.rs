@@ -20,7 +20,8 @@ pub(super) struct Replay<'a> {
 
 impl<'a> Replay<'a> {
     pub fn new(state: &State, store: &'a mut Store) -> Result<Self> {
-        super::super::tuning::set_slice_mode(state.options.slice_mode);
+        // Slicing and visit normalization follow the checkpointed options, not ambient knobs.
+        super::super::tuning::set_connected(&state.options);
         let mut scratch = State::restore(&state.payloads()?, state.geometry, state.seed)?;
         scratch.attach_view(store.view)?;
         // Same eviction policy as training (CONNECTED.md §Visit balance).

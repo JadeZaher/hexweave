@@ -35,6 +35,7 @@ mod connected_predictor;
 #[cfg(test)]
 mod connected_predictor_contracts;
 mod connected_quantization;
+mod connected_reach;
 mod connected_replay;
 mod connected_restart;
 mod connected_restart_config;
@@ -125,6 +126,8 @@ mod connected_bias_contracts;
 mod connected_contracts;
 #[cfg(test)]
 mod connected_curve_contracts;
+#[cfg(test)]
+mod connected_forward_contracts;
 #[cfg(test)]
 mod connected_golden_contracts;
 #[cfg(test)]

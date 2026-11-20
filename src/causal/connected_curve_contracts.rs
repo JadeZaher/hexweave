@@ -101,18 +101,25 @@ fn connected_curve_saturates_outside_the_knots_and_other_paths_extrapolate() -> 
 
 #[test]
 fn normalized_visit_input_pulse_curve_and_down_credit_match_central_differences() -> Result<()> {
-    for slice_mode in [SliceMode::Full, SliceMode::Windowed, SliceMode::Hybrid] {
-        check_visit_adjoints(slice_mode)?;
+    // The last row turns post-visit normalization off (`connected.visit_norm: false`).
+    for (slice_mode, visit_norm) in [
+        (SliceMode::Full, true),
+        (SliceMode::Windowed, true),
+        (SliceMode::Hybrid, true),
+        (SliceMode::Full, false),
+    ] {
+        check_visit_adjoints(slice_mode, visit_norm)?;
     }
     Ok(())
 }
 
-/// Verifies post-visit RMS normalization, input adjoints and FFN/pulse parameter gradients.
-fn check_visit_adjoints(slice_mode: SliceMode) -> Result<()> {
+/// Verifies post-visit RMS normalization (or its absence), input adjoints and FFN/pulse gradients.
+fn check_visit_adjoints(slice_mode: SliceMode, visit_norm: bool) -> Result<()> {
     let _guard = tuning::scoped(Knobs {
         connected: true,
         connected_fp32: true,
         slice_mode,
+        visit_norm,
         ..Knobs::ORACLE
     });
     let (_, mut tile, baseline) = super::connected_precision_contracts::explicit(71)?;
@@ -123,7 +130,8 @@ fn check_visit_adjoints(slice_mode: SliceMode) -> Result<()> {
     let history: Vec<_> = (0..16).map(|j| 0.02 * (j as f32 * 0.31).cos()).collect();
     let visible = tile.forward(&input, &memory, &history)?.output;
     let rms = (dot(&visible, &visible) / 16.0).sqrt();
-    assert!((rms - 1.0).abs() < 1e-3, "post-visit RMS {rms}");
+    // The input has RMS about 2, so an unnormalized output is far from RMS 1.
+    assert_eq!((rms - 1.0).abs() < 1e-3, visit_norm, "post-visit RMS {rms}");
     if slice_mode != SliceMode::Full {
         let mut flipped = input.clone();
         flipped[0] = -flipped[0];

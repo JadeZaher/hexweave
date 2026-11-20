@@ -206,7 +206,8 @@ fn restart_replay_steps_only_the_restarted_tile_below_its_position() -> Result<(
         .memory
         .records
         .iter()
-        .any(|r| r.shared_revision >= position && eligible(r, base.epoch, &revisions, position)));
+        .any(|r| r.shared_revision >= position
+            && eligible(r, base.epoch, &revisions, position, base.memory.lag)));
     base.memory.records.retain(|r| r.shared_revision < position);
     let (loss, _) = replay_salted(&base, &mut base_store, &corpus, position, RESTART_SALT)?;
     assert_eq!(entry.replay_loss_sum, f64::from(loss));
