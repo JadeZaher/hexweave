@@ -69,6 +69,33 @@ and the **per-tile signal** that will trigger splits. Until then both are placeh
 - **Risk to watch:** exposure skew. At 7 tiles the busiest tile already gets about 16× the visits of
   the quietest. At 19 the outer ring may starve.
 
+### Phase 1 result (2026-11-20): gate failed on writes; extra tiles unused
+
+Three 2-hour runs, Lambert recipe, seed 7, 4,096-byte evaluations
+(`work/core-runs/connected-fp32-v60-{a-7t-r6,b-19t-r19,c-19t-r6}-s7-20261120/`).
+
+| Arm | Anchors | Held-out, last four evaluations up to 134,761 | Written per anchor | Tiles under 1% of visits |
+| :--- | ---: | ---: | ---: | ---: |
+| A (7 tiles, 6 resident) | 134,761 | 3.012 | 7.6 KB | 0 of 7 |
+| B (19 tiles, 19 resident) | 179,015 | 3.017 | 19.6 KB | 9 of 19 |
+| C (19 tiles, 6 resident) | 154,911 | 3.017 | 741 KB | 9 of 19 |
+
+- **Quality under paging:** C equals B exactly at all 24 shared evaluations. Paging is lossless, so
+  this half of the gate holds by construction and was not a real test.
+- **Writes:** C wrote 114.9 GB in 2 hours (30,697 bundle writes of about 3.7 MB), 98× arm A per
+  anchor against a limit of 3×. Gate failed. Each visit to a non-resident tile costs one full-bundle
+  read and one full-bundle write; a write-behind of 3 does not absorb 13 non-resident tiles. No
+  24-hour run at this setting.
+- **Size effect:** B is level with A at matched anchors. Tiles 9 (start), 5 and 10 take 80% of
+  visits (40.5%, 28.3%, 11.2%); nine tiles are each under 1%. Routing does not use the extra tiles,
+  so by the rule above this must be fixed before Phase 2.
+- **Not done:** sample-quality scores for these checkpoints. Arm C's weights were deleted (the
+  model is the same as B's up to its last anchor); reports and logs are kept.
+
+Follow-up chosen by the owner (2026-11-20): shared tile-sized sections with a priority-queue write
+and a teaching path, applied on the wave pattern. Its first pilots run at 19 tiles with all tiles
+resident, to keep disk traffic out of the comparison.
+
 ## Phase 2: dynamic tile count by cloning
 
 **Question:** can the model add capacity where it is needed without a relearning dip?
