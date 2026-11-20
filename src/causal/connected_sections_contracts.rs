@@ -13,6 +13,8 @@ use super::super::connected_wave::step;
 use super::super::core_corpus::{Corpus, END};
 use super::super::shared::Prefix;
 use super::super::storage_paths::digest;
+use super::super::store_api::TileStore;
+use super::super::tile_gradients::TileGradients;
 use super::super::tuning::{self, Knobs};
 use super::rules::config;
 use super::*;
@@ -204,6 +206,49 @@ fn fixed(state: &State, store: &mut Store) -> Result<(Prefix, Trace, Credit)> {
     )?;
     let credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, b' ')?;
     Ok((prefix, trace, credit))
+}
+
+#[test]
+fn teaching_pulls_at_the_tiles_own_adjoint_scale() -> Result<()> {
+    let _guard = scoped();
+    let out = fresh("shared-teach")?;
+    let corpus = corpus(&out.join("corpus"), &text())?;
+    let mut options = options(json!({"sections":1,"wave":1,"teach":0.5}), 1)?;
+    options.visits = 1;
+    let (mut state, mut store) = arm(&out.join("run"), &corpus, options)?;
+    tuning::set_connected(&options);
+    let (prefix, trace, mut credit) = fixed(&state, &mut store)?;
+    let own = credit.gradients[0].values.clone();
+    observe(&mut state, &mut store, &prefix, &trace, &mut credit)?;
+    let length = |values: &[Vec<f32>]| -> f64 {
+        let squares = values.iter().flatten().map(|v| f64::from(*v).powi(2));
+        squares.sum::<f64>().sqrt()
+    };
+    // G' = (G + G(p)) / 2 at teach 0.5, so the pull's own gradient is 2 G' - G.
+    let taught = credit.gradients[0].values.iter().zip(&own);
+    let pull: Vec<Vec<f32>> = taught
+        .map(|(a, b)| a.iter().zip(b).map(|(a, b)| 2.0 * a - b).collect())
+        .collect();
+    // By linearity the pull is the raw-gap gradient times |g| / |gap|: tau stays a true share.
+    let (frame, read) = (&trace.frames[0], trace.read.as_ref().expect("read"));
+    let gap: Vec<f32> = frame
+        .output
+        .iter()
+        .zip(&read.value)
+        .map(|(y, s)| y - s)
+        .collect();
+    let mut raw = TileGradients::zeros(state.geometry, frame.tile)?;
+    store.read(frame.tile, |tile| {
+        let (memory, sink) = (&prefix.memory, Some(&mut raw));
+        tile.backward(&frame.input, memory, &frame.history, &gap, None, sink, None)
+    })?;
+    let expected = credit.adjoint_norms[0] / length(&[gap]);
+    let scale = length(&pull) / length(&raw.values);
+    assert!(
+        (scale / expected - 1.0).abs() < 1e-3,
+        "{scale} vs {expected}"
+    );
+    Ok(())
 }
 
 #[test]
