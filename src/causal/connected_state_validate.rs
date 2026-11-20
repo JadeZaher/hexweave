@@ -88,6 +88,7 @@ impl State {
         super::super::connected_restart::validate(self)?;
         super::super::connected_wave::validate_state(self)?;
         super::super::connected_balance::validate(self)?;
+        super::super::connected_sections::validate(self)?;
         self.validate_bias()?;
         self.validate_shared()
     }

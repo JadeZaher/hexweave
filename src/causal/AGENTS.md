@@ -78,6 +78,11 @@ estimate kept in training state; see [visit balance](CONNECTED.md#visit-balance)
 read admits, and `connected.visit_norm` (default true, identity when false) gates the v4
 post-visit normalization; see
 [memory reach](CONNECTED.md#memory-reach-and-visit-normalization-switches).
+Optional `connected.shared` (absent by default, identity when present; experimental,
+`anchor_exact` only) adds up to four pinned tile-shaped sections read at every route entry and
+written once per shared wave (write credit `mix` of the visited tiles' corrections or `entry`,
+the exact read adjoint; `teach` pulls at a tile's own adjoint scale); see
+[shared sections](CONNECTED.md#shared-sections).
 
 Connected checkpoint completion uses `connected_completion` and frozen evaluation
 replay. It snapshots the exact named checkpoint into owned `work/inference/`

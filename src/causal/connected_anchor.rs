@@ -28,6 +28,8 @@ pub(super) struct Trace {
     pub frames: Vec<Frame>,
     pub output: Vec<f32>,
     pub versions: [u64; TILES],
+    /// The shared-section read at route entry; None without `connected.shared`.
+    pub read: Option<super::connected_sections_read::Read>,
 }
 
 impl Trace {
@@ -57,13 +59,32 @@ pub(super) struct Credit {
     pub embedding: Vec<f32>,
     pub bias_gradient: Option<Vec<f32>>,
     pub output_rms: f32,
+    /// L2 norm of each frame's raw output adjoint, the seed of its exact gradient.
+    pub adjoint_norms: Vec<f64>,
+    /// The exact adjoint at the shared read (route entry); None without a read.
+    pub read_adjoint: Option<Vec<f32>>,
 }
 
-/// Execute a target-free route; each frame retains its exact detached memory input.
+/// Execute a target-free route from the prefix's last row; each frame retains its exact detached
+/// memory input.
 pub(super) fn forward<S: TileStore>(
     store: &mut S,
     geometry: Geometry,
     prefix: &Prefix,
+    visits: usize,
+    draw: super::connected_route::Draw,
+    memory: impl FnMut(usize, &[f32]) -> Result<Vec<f32>>,
+) -> Result<Trace> {
+    let entry = (prefix.initial(geometry).to_vec(), None);
+    forward_from(store, geometry, prefix, entry, visits, draw, memory)
+}
+
+/// `forward` from an explicit route-entry state and its shared read (`connected_sections_read`).
+pub(super) fn forward_from<S: TileStore>(
+    store: &mut S,
+    geometry: Geometry,
+    prefix: &Prefix,
+    entry: (Vec<f32>, Option<super::connected_sections_read::Read>),
     visits: usize,
     mut draw: super::connected_route::Draw,
     mut memory: impl FnMut(usize, &[f32]) -> Result<Vec<f32>>,
@@ -71,7 +92,9 @@ pub(super) fn forward<S: TileStore>(
     ensure!((1..=4).contains(&visits), "invalid connected visit bound");
     let mesh = super::geometry::mesh();
     let versions = store.versions()?;
-    let (mut tile_id, mut input) = (START_TILE, prefix.initial(geometry).to_vec());
+    let (input, read) = entry;
+    ensure!(input.len() == geometry.width, "connected route entry width");
+    let (mut tile_id, mut input) = (START_TILE, input);
     let mut frames = Vec::with_capacity(visits);
     for depth in 0..visits {
         let history = memory(tile_id, &input)?;
@@ -110,6 +133,7 @@ pub(super) fn forward<S: TileStore>(
         frames,
         output: input,
         versions,
+        read,
     })
 }
 
@@ -130,9 +154,11 @@ pub(super) fn gather<S: TileStore>(
     let mut upstream = task.input_correction;
     let mut corrections = Vec::with_capacity(trace.frames.len());
     let mut gradients = Vec::with_capacity(trace.frames.len());
+    let mut adjoint_norms = Vec::with_capacity(trace.frames.len());
     let mut prefix_adjoint = vec![0.0; prefix.memory.len()];
     for frame in trace.frames.iter().rev() {
         corrections.push(norm::unit_clip(&upstream)?);
+        adjoint_norms.push(super::connected_signal::length(&upstream));
         let mut gradient = TileGradients::zeros(shared.geometry, frame.tile)?;
         upstream = store.read(frame.tile, |tile| {
             ensure!(
@@ -153,8 +179,11 @@ pub(super) fn gather<S: TileStore>(
     }
     corrections.reverse();
     gradients.reverse();
+    adjoint_norms.reverse();
     let final_row = prefix_adjoint.len() - shared.geometry.width;
+    let upstream = super::connected_sections_read::entry_adjoint(trace.read.as_ref(), upstream)?;
     norm::add(&mut prefix_adjoint[final_row..], &upstream)?;
+    let read_adjoint = trace.read.as_ref().map(|_| upstream);
     let mut embedding = task.embedding_gradient;
     shared.add_prefix_gradient(prefix, &prefix_adjoint, &mut embedding)?;
     Ok(Credit {
@@ -164,6 +193,8 @@ pub(super) fn gather<S: TileStore>(
         embedding,
         bias_gradient: task.bias_gradient,
         output_rms: task.output_rms,
+        adjoint_norms,
+        read_adjoint,
     })
 }
 

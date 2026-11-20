@@ -46,6 +46,7 @@ pub(super) enum View {
     Ternary,
 }
 
+#[derive(Clone)]
 pub(super) struct Weights {
     pub version: u64,
     pub mode: View,

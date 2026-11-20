@@ -44,6 +44,9 @@ mod connected_restart_replay;
 mod connected_route;
 #[cfg(test)]
 mod connected_route_contracts;
+mod connected_sections;
+mod connected_sections_read;
+mod connected_sections_write;
 mod connected_signal;
 mod connected_simd;
 mod connected_state;

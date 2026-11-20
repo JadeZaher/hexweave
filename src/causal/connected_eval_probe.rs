@@ -1,8 +1,11 @@
 //! Fixed-offset frozen probes and explicit score counts; see CONNECTED.md.
 
+use super::super::connected_sections_read::{cosine, entry};
 use super::super::connected_state::State;
 use super::super::connected_store::Store;
 use super::super::core_corpus::{window_before, Corpus, SPAN_BYTES};
+use super::super::geometry::TILES;
+use super::super::store_api::TileStore;
 use super::replay::Replay;
 use super::Budget;
 use anyhow::Result;
@@ -79,6 +82,18 @@ pub(super) fn score(
     window: usize,
     budget: &Budget<'_>,
 ) -> Result<Value> {
+    score_with(state, store, probes, window, budget, true)
+}
+
+/// `score`, with the shared-section read skipped when `read` is false.
+pub(super) fn score_with(
+    state: &State,
+    store: &mut Store,
+    probes: &[Probe],
+    window: usize,
+    budget: &Budget<'_>,
+    read: bool,
+) -> Result<Value> {
     let mut scores = Vec::with_capacity(probes.len());
     let (mut loss, mut targets, mut requested) = (0.0, 0, 0);
     for probe in probes {
@@ -93,7 +108,7 @@ pub(super) fn score(
             anchors_since_first_pass: probe.first_observed_at.map(|at| state.anchors - at),
         };
         if !budget.interrupted() {
-            let mut replay = Replay::new(state, store)?;
+            let mut replay = Replay::with_read(state, store, read)?;
             for t in probe.first.saturating_sub(2)..probe.first + probe.scored {
                 if budget.interrupted() {
                     break;
@@ -119,6 +134,60 @@ pub(super) fn score(
         "bits_per_byte": bits(loss, targets), "partial": targets != requested,
         "probes": scores}),
     )
+}
+
+/// Route-entry states `tile_similarity` samples: round-robin over the probes' scored positions.
+pub(super) const SIMILARITY_POSITIONS: usize = 8;
+
+/// Mean pairwise cosine between every tile's output change (output - input) at the same post-read
+/// route-entry states
+/// (zero history), over up to `SIMILARITY_POSITIONS` positions; None without positions.
+pub(super) fn similarity(
+    state: &State,
+    store: &mut Store,
+    probes: &[Probe],
+    window: usize,
+) -> Result<Option<f64>> {
+    super::super::tuning::set_connected(&state.options);
+    let mut entries = Vec::new();
+    for round in 0..SIMILARITY_POSITIONS {
+        for probe in probes.iter().filter(|probe| round < probe.scored) {
+            if entries.len() < SIMILARITY_POSITIONS {
+                let bytes = window_before(&probe.bytes, probe.first + round, window);
+                let prefix = state.shared.prefix(&bytes)?;
+                let sections = state.sections.as_ref();
+                let (input, _) = entry(sections, state.geometry, &prefix)?;
+                entries.push((input, prefix.memory));
+            }
+        }
+    }
+    let history = vec![0.0; state.geometry.width];
+    let mut outputs = Vec::with_capacity(TILES);
+    for tile in 0..TILES {
+        outputs.push(store.read(tile, |tile| {
+            // The residual change: every tile's output is close to its input.
+            let forward = |(input, memory): &(Vec<f32>, Vec<f32>)| -> Result<Vec<f32>> {
+                let output = tile.forward(input, memory, &history)?.output;
+                Ok(output.iter().zip(input).map(|(y, x)| y - x).collect())
+            };
+            entries.iter().map(forward).collect::<Result<Vec<_>>>()
+        })?);
+    }
+    Ok(pairwise_cosine(&outputs))
+}
+
+/// Mean cosine over every pair of tiles at every shared position; None without a pair.
+pub(super) fn pairwise_cosine(changes: &[Vec<Vec<f32>>]) -> Option<f64> {
+    let (mut total, mut pairs) = (0.0, 0u64);
+    for (index, first) in changes.iter().enumerate() {
+        for second in &changes[index + 1..] {
+            for (a, b) in first.iter().zip(second) {
+                total += cosine(a, b);
+                pairs += 1;
+            }
+        }
+    }
+    (pairs > 0).then(|| total / pairs as f64)
 }
 
 fn bits(loss: f64, count: usize) -> Option<f64> {

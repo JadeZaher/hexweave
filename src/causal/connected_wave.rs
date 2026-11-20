@@ -59,14 +59,20 @@ pub(super) fn validate(options: &Options) -> Result<()> {
     Ok(())
 }
 
-/// Run admission: the anchor limit and every checkpoint and evaluation fall on a wave end.
+/// Run admission: the anchor limit and every checkpoint and evaluation fall on a wave end (the
+/// shared wave when `connected.shared` is set; it is a multiple of `anchor_batch`).
 pub(super) fn validate_run(options: &Options, config: &Config) -> Result<()> {
-    let batch = u64::from(options.anchor_batch);
+    let batch = u64::from(
+        options
+            .shared
+            .map_or(options.anchor_batch, |shared| shared.wave),
+    );
     ensure!(
         [config.anchors, config.checkpoint_every, config.eval_every]
             .iter()
             .all(|value| value.is_multiple_of(batch)),
-        "connected anchors, checkpoint_every and eval_every must be multiples of anchor_batch"
+        "connected anchors, checkpoint_every and eval_every must be multiples of anchor_batch \
+         and of shared.wave"
     );
     Ok(())
 }
@@ -83,8 +89,26 @@ pub(super) fn validate_state(state: &State) -> Result<()> {
     Ok(())
 }
 
-/// The training step: `connected_step::step` at batch 1, else the rest of the aligned wave.
+/// The training step: the rest of the aligned shared wave when `connected.shared` is set (its
+/// write included), else one `unit`.
 pub(super) fn step<S: TrainingSource>(
+    state: &mut State,
+    store: &mut Store,
+    source: &S,
+    options: Options,
+    rate: f64,
+    threaded: bool,
+) -> Result<f32> {
+    if options.shared.is_some() {
+        return super::connected_sections_write::step(
+            state, store, source, options, rate, threaded,
+        );
+    }
+    unit(state, store, source, options, rate, threaded)
+}
+
+/// `connected_step::step` at batch 1, else the rest of the aligned anchor wave.
+pub(super) fn unit<S: TrainingSource>(
     state: &mut State,
     store: &mut Store,
     source: &S,
@@ -186,7 +210,8 @@ fn anchor<S: TrainingSource>(
 ) -> Result<Tally> {
     let (_, prefix, trace) = connected_step::forward(state, store, source, options, revisions)?;
     let target = source.anchor_target(&state.cursor)?;
-    let credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, target.byte)?;
+    let mut credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, target.byte)?;
+    super::connected_sections_read::observe(state, store, &prefix, &trace, &mut credit)?;
     let observed_target = state.shared.target_feature(target.byte)?;
     let tally = Tally::of(&trace, &credit)?;
     // The advantage uses this anchor's baseline; only the route step waits.

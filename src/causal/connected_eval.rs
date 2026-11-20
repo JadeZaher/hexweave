@@ -139,6 +139,18 @@ fn measure(
         [0.60, 0.25, 0.15]
     };
     let dev = probe::score(state, store, &heldout, corpus.window, &budget(fractions[0]))?;
+    // The read-free score gets whatever the same cumulative deadline leaves; see its `partial`.
+    let shared = if state.sections.is_some() && !retention_only {
+        let window = corpus.window;
+        let without =
+            probe::score_with(state, store, &heldout, window, &budget(fractions[0]), false)?;
+        Some(json!({"heldout_without_shared": without["bits_per_byte"],
+            "heldout_without_shared_partial": without["partial"],
+            "tile_similarity": probe::similarity(state, store, &heldout, window)?,
+            "tile_similarity_positions": probe::SIMILARITY_POSITIONS}))
+    } else {
+        None
+    };
     let retention_fraction = fractions[0] + fractions[1];
     let retention = probe::score(
         state,
@@ -161,7 +173,7 @@ fn measure(
         )?
     };
     let requested_samples = if retention_only { 0 } else { cases };
-    Ok(json!({
+    let mut result = json!({
         "schema": 2, "kind": if retention_only { "first_exposure_retention" } else { "full" },
         "dev_nll_per_byte": dev["nll_per_byte"], "dev_bits_per_byte": dev["bits_per_byte"],
         "heldout_targets": dev["scored_targets"], "heldout": dev, "retention": retention,
@@ -175,7 +187,11 @@ fn measure(
         "budget_fractions": fractions,
         "memory_policy": "isolated-observe-then-frozen-local-lanes-v1",
         "forward": store.precision, "weights_and_predictor_frozen": true,
-    }))
+    });
+    if let Some(shared) = shared {
+        result["shared"] = shared;
+    }
+    Ok(result)
 }
 
 /// Nucleus-sampled story continuations after a full held-out window (AGENTS.md §Generation).

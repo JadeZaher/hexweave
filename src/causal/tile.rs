@@ -10,6 +10,7 @@ use cache::Cache;
 #[path = "tile_cache.rs"]
 mod cache;
 
+#[derive(Clone)]
 pub(super) struct Tile {
     pub geometry: Geometry,
     pub id: usize,

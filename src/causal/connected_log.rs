@@ -90,6 +90,9 @@ impl Log {
         if let Some(balance) = super::super::connected_balance::report(state)? {
             line["balance"] = balance;
         }
+        if let Some(shared) = super::super::connected_sections::report(state)? {
+            line["shared"] = shared;
+        }
         add_scale(&mut line, state, &self.previous, interval_anchors);
         add_waves(&mut line, state, &self.previous);
         if let Some(prior) = self.readout_prior.take() {

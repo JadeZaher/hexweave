@@ -16,10 +16,17 @@ use serde_json::{json, Value};
 pub(super) struct Replay<'a> {
     state: State,
     store: &'a mut Store,
+    /// Whether route entries take the shared-section read (false: `heldout_without_shared`).
+    read: bool,
 }
 
 impl<'a> Replay<'a> {
     pub fn new(state: &State, store: &'a mut Store) -> Result<Self> {
+        Self::with_read(state, store, true)
+    }
+
+    /// A frozen replay whose route entries skip the shared read when `read` is false.
+    pub fn with_read(state: &State, store: &'a mut Store, read: bool) -> Result<Self> {
         // Slicing and visit normalization follow the checkpointed options, not ambient knobs.
         super::super::tuning::set_connected(&state.options);
         let mut scratch = State::restore(&state.payloads()?, state.geometry, state.seed)?;
@@ -30,6 +37,7 @@ impl<'a> Replay<'a> {
         Ok(Self {
             state: scratch,
             store,
+            read,
         })
     }
 
@@ -62,10 +70,13 @@ impl<'a> Replay<'a> {
         let state = &self.state;
         let revisions = std::array::from_fn(|id| self.store.slots[id].meta.revision);
         let shared_revision = state.shared_latent.as_ref().map_or(0, |value| value.step);
-        connected_anchor::forward(
+        let sections = state.sections.as_ref().filter(|_| self.read);
+        let entry = super::super::connected_sections_read::entry(sections, state.geometry, prefix)?;
+        connected_anchor::forward_from(
             self.store,
             state.geometry,
             prefix,
+            entry,
             state.options.visits,
             Draw::GREEDY,
             |tile, input| {

@@ -108,6 +108,9 @@ pub(super) struct Options {
     /// Post-visit RMS normalization of the residual stream (CONNECTED.md §v4); default on.
     #[serde(skip_serializing_if = "is_true")]
     pub visit_norm: bool,
+    /// EXPERIMENT: pinned shared sections read at every route entry (CONNECTED.md §Shared sections).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<super::connected_sections::SharedOptions>,
 }
 
 /// Bounded prioritized replay: buffer `capacity` and replayed anchors `per_anchor`.
@@ -151,6 +154,7 @@ impl Default for Options {
             balance: None,
             memory_lag: 1,
             visit_norm: true,
+            shared: None,
         }
     }
 }
@@ -208,6 +212,7 @@ impl Options {
         super::connected_reach::validate(self)?;
         self.balance
             .map_or(Ok(()), |balance| balance.validate(self.credit_mode))?;
+        super::connected_sections::validate_options(self)?;
         self.validate_paging_and_replay()
     }
 

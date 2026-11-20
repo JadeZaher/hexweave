@@ -59,7 +59,8 @@ fn complete<S: TrainingSource>(
     let (bytes, prefix, trace) = forward(state, store, source, options, &revisions)?;
     // The target is unavailable to every route computation above this boundary.
     let target = source.anchor_target(&state.cursor)?;
-    let credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, target.byte)?;
+    let mut credit = connected_anchor::gather(&state.shared, store, &prefix, &trace, target.byte)?;
+    super::connected_sections_read::observe(state, store, &prefix, &trace, &mut credit)?;
     // Replayed anchors run under the same weights; only their tile gradients survive.
     let mut replayed = Accumulator::default();
     super::connected_replay::run(state, store, source, &mut replayed)?;
@@ -109,12 +110,16 @@ pub(super) fn forward<S: TrainingSource>(
 ) -> Result<(Vec<u8>, Prefix, Trace)> {
     let bytes = source.pending_prefix(&state.cursor)?;
     let prefix = state.shared.prefix(&bytes)?;
+    // Sections change only at shared-wave ends, so this read uses completed waves' weights.
+    let sections = state.sections.as_ref();
+    let entry = super::connected_sections_read::entry(sections, state.geometry, &prefix)?;
     let random = tuning::hash(state.seed, &[state.anchors, 0x414e4348]);
     let draw = super::connected_route::draw(&options, state, &[state.anchors], random);
-    let trace = connected_anchor::forward(
+    let trace = connected_anchor::forward_from(
         store,
         state.geometry,
         &prefix,
+        entry,
         options.visits,
         draw,
         |tile, input| super::connected_reach::anchor_read(state, input, tile, revisions, &options),

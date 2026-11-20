@@ -1066,6 +1066,124 @@ fixture shows neither divergence nor benefit. Untested: whether the stream grows
 without normalization (the v3 pilot's alignment growth is the risk), any quality effect of either
 switch, and `memory_lag` under lanes, hybrid or waves.
 
+### Shared sections
+
+EXPERIMENT, a hypothesis with no measurements. `connected.shared` =
+`{sections, wave, queue, teach, credit}` (absent is today's behaviour and omitted from identity;
+present is run identity, defaults inside the block omitted). Admission: `sections` 1..=4
+(required), `wave` 1..=64 (default 8) and a multiple of `anchor_batch`, `queue` (default true),
+`teach` in [0, 0.5] (default 0), `credit` `"mix"` (default) or `"entry"`; `credit_mode:
+anchor_exact` only; `connected.replay` and `restart.replay` are refused (replays do not read the
+sections). Run admission requires `anchors`, `checkpoint_every` and `eval_every` to be multiples
+of `wave`. Implementation: `connected_sections.rs` (storage), `connected_sections_config.rs`
+(options), `connected_sections_check.rs` (validation, report), `connected_sections_read.rs` (read,
+write credit, teaching), `connected_sections_write.rs` (wave loop, queue, write).
+
+Storage. Each section is a `Tile` of the centre tile's shape (`Tile::new(geometry, START_TILE,
+seed')`, so `tile.id` is `START_TILE` and slice-mode hashing treats it like the centre) with its
+own Adam `Latents`, initialized exactly as a tile (FP32 masters from the trits under FP32). Its
+seed block is the one a tile with id `TILES + k` would get, disjoint from every tile's and from
+E's. Sections live in `State.sections`, not in the paged `Store`: the store's slots, heat, lease
+flags, versions arrays and `quiescent` check are all sized `TILES`, and `geometry.shapes` refuses
+ids >= `TILES`, so extending it would touch every paging path for four never-evicted bundles.
+They are pinned (never paged or evicted), outside `resident_tiles`, and checkpointed as common
+payloads `section-<k>.bin` in the unchanged tile codec (direction history all zero: sections
+never track trit reversals), bound by the manifest and hash-checked on load; their hash,
+version and steps sit in `connected.json` under `shared.bundles`. The report's `resident_bytes`
+counts packed trits, masters, moments and the FP32 view. `causal plan`'s ledger has no
+connected options and is unchanged.
+
+Read (every anchor, training, evaluation and completion alike). With x the prefix's last row (the
+state that entered the route before), r = mean over sections of `section.forward(x, prefix,
+zeros)` (zero history: sections read no memory), and the route starts at `N(x + r)`, N the
+post-visit RMS normalization when `visit_norm` is on (the identity otherwise), the convention a
+visit's output gets. A section is an ordinary residual tile: its output is `s_k = N(x + delta_k)`,
+close to x because x already has RMS 1 and delta_k is small, so r is close to x and the entry is
+close to `N(x + mean(delta_k) / 2)`. The read therefore mostly re-adds x; what the sections
+contribute is about half their mean residual change, which `read_delta` measures. The read is
+detached in the reverse pass: the adjoint reaching x (and so E's last prefix row) is N's backward
+of the route's input adjoint; no adjoint flows into the sections or through their attention over
+the prefix. The full derivative is `d entry / dx = Nback (I + dr/dx)` with dr/dx close to the
+projection orthogonal to x, so detaching roughly halves E's direct last-row gradient compared
+with the true one. Sections commit only at shared-wave ends, so every anchor of a wave reads the
+same frozen weights.
+
+Write credit (per anchor, after `gather`). `credit: "mix"`: w_i = W(e x_i) / Σ_j W(e x_j) over
+the route's visits, x_i = the visited tile's `TileSignal` distance / its `bar` (the Lambert law's
+input), W the plasticity dial `connected_plasticity::dial` (principal Lambert W, capped at 4, so
+x_i past about 80 bars ties). Equal weights 1/n when any visited tile's signal is unwarmed, its
+bar is 0 (no `threshold`), `restart` is absent, or every W is 0; `lambert_share` reports how often
+the Lambert weights applied. "Mix of local credit" is read as the mix of the visited tiles'
+output corrections c_i (the unit-clipped adjoints at their outputs, the vectors memory records
+and the predictor already treat as local credit): u = Σ w_i c_i is taken as the section's output
+adjoint, and the section's gradient is its own backward from u at (x, prefix, zero history).
+Mixing the visited tiles' parameter gradients instead is ill-posed (route rows differ in shape by
+tile). `credit: "entry"`: the section's output adjoint is `unit_clip(g_r / K)`, g_r the exact
+adjoint at the read (`Credit::read_adjoint`, the vector `gather` adds to the last prefix row) and
+K the section count, since r averages the K outputs: the section's true gradient through the
+read, up to the clip. In both modes `credit_alignment` is the lifetime mean of cos(u, g_r) (0 when
+either is zero): a mix that does not point where the loss gradient points reads near 0. Each
+anchor queues (x, prefix memory, the chosen adjoint); the queue is session-only and empty at
+every wave end, which is where checkpoints, evaluations, STOP and the deadline fall
+(`connected_wave::step` runs a whole shared wave).
+
+Write (wave end, `connected_sections_write::finish`). m = the wave's mean x and c the queue's
+`centre`, an EMA of earlier waves' m (weight `max(1/n, 1/16)` for the n-th wave, folded in after
+the match; absent before the first wave, when no section has a key). Wave means share a large
+common component (position `window - 1`, normalized rows), so uncentred cosines are all near 1.
+match_k = `clamp((cos(m - c, key_k - c) + 1) / 2, 0.05, 1)`, 1 without a key, 0.5 when either
+centred vector is zero; each section's last `match` is reported. With `queue`: every priority
+gains its match, the highest priority wins (ties within relative 1e-9 go to the section written
+longest ago, never-written first, then the lowest index), the winner pays `Σ_k match_k x r`,
+`r = clamp(size / EMA(size), 0.5, 2)` (1 on its first write), size the L2 norm of its applied
+Adam steps this wave, and then the mean priority is subtracted from every section, which keeps
+them centred without changing any selection. Without `queue` the highest match wins, same ties,
+priorities stay exactly 0. The winner takes one unit-gain `Mode::Local` Adam step per anchor of
+the wave, each gradient computed against a clone of its wave-start weights, at `local_rate x
+local_decay.factor(last anchor)` (no per-tile restart, plasticity or balance factor: sections
+have none). Then the winner's key (stored uncentred) and size EMA fold m and size with weight
+`max(1/writes, 1/16)`. `update_rms` is size / sqrt(locally updated coefficients). Queue state
+lives in `connected.json` (`shared.queue`), never in a bundle; resume is bit-exact.
+
+Teach (`teach` = tau > 0). A visited tile's exact gradient G(g) comes from its raw output adjoint
+g: `gather` seeds the tile's backward with the unclipped upstream (`connected_anchor::gather`);
+the stored correction is only its unit-clipped copy. The pull direction is `p = (y - s) |g| /
+max(|y - s|, 1e-12)`, y the visit's output and s the anchor's frozen read r: `y - s` rescaled to
+the visit's own adjoint norm (`Credit::adjoint_norms`), so tau is a true share of the update
+instead of a raw `y - s` about 100 times the real credit. The local target `y - g` is blended to
+`(1 - tau)(y - g) + tau (y - p)`, whose adjoint is `(1 - tau) g + tau p`; by linearity of the
+backward in its seed the tile's credit becomes `(1 - tau) G(g) + tau G(p)`, one extra
+parameter-only backward per visit. The adjoint propagated to earlier tiles and E is unchanged.
+At tau 0 the blend is skipped, so updates are bit-identical to `teach` absent.
+
+Monitors (`shared` in log rows and the report; lifetime values in both): per section `writes`,
+`priority`, `match`, `last_write_wave`, `update_rms` of its last write and `weight_rms` (RMS over
+its tile-matrix masters, null before a ternary section's first write); `mean_tile_weight` per
+tile (mean w_i over its visits; collapse onto one tile shows as one tile near 1); `read_delta`
+(mean RMS(r - x) / RMS(x), how far the read moves from the state it is added to; RMS(r) / RMS(x)
+would read about 1 by the residual identity); `credit_alignment`; `lambert_share`;
+`resident_bytes`. Each full evaluation adds `eval.shared`: `heldout_without_shared`, the same
+held-out probes scored with the read skipped (route entry x, the no-shared path), with its own
+`heldout_without_shared_partial`, and `tile_similarity`, the mean pairwise cosine of every tile's
+residual change (output - input; the outputs themselves all sit close to the input) on the same 8
+post-read route-entry states (round-robin first scored positions of the held-out probes, zero
+history; `tile_similarity_positions`). The ordinary held-out score keeps its full budget share;
+the read-free score runs after it under the same cumulative deadline and gets what is left (its
+time counts against the later retention and sample shares too).
+
+Cost per anchor: `sections` extra tile forwards (the read); amortized over a wave, one section
+backward and one Adam step over one section (the write); with teach, one extra tile backward per
+visit. Evaluation scores the held-out probes twice and runs 8 x `TILES` tile forwards. Memory:
+4 pinned sections at width 128 under FP32 are about 4 x 4.6 MB (masters, two moments, view,
+trits); the wave queue holds `wave` prefix copies (L x d x 4 bytes, 256 KiB at a 512-byte
+window, so up to 16 MiB at wave 64); the write holds one cloned section and one gradient.
+
+Limits: sections read no memory and receive no route-dependent input; under `mix` the write
+credit is a proxy (other tiles' adjoints), not the section's own gradient; the read is detached,
+so E learns nothing about it; the quantize audit rounds sections with the tiles. Tested: an
+`entry` write on a fixed fixture input lowers that input's loss; Lambert weights on hand-warmed
+signals (the flow fixture never warms one). Untested: any quality effect.
+
 ## Persistence and measurements
 
 The store retains slot metadata and at most `resident_tiles` (default `workers`,

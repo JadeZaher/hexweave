@@ -1,6 +1,7 @@
 //! Owned inference scratch and read-only source hashes; see CONNECTED.md.
 
 use super::super::connected_checkpoint_io as io;
+use super::super::connected_sections::{payload, MAX_SECTIONS};
 use super::super::connected_store_codec;
 use super::super::geometry::{Geometry, TILES};
 use super::super::storage_paths::digest;
@@ -70,7 +71,8 @@ impl Drop for Scratch {
     }
 }
 
-fn payloads(geometry: Geometry) -> Result<Vec<(String, u64)>> {
+/// The hashed payload set: manifest, common state, tiles and any shared-section bundles present.
+fn payloads(path: &Path, geometry: Geometry) -> Result<Vec<(String, u64)>> {
     let mut payloads = vec![
         ("manifest.json".to_string(), 1024 * 1024),
         ("connected.json".to_string(), io::COMMON_CAP),
@@ -82,12 +84,19 @@ fn payloads(geometry: Geometry) -> Result<Vec<(String, u64)>> {
             connected_store_codec::cap(geometry, id)?,
         ));
     }
+    // Section files are bound by the manifest, so a dropped one fails the verifying load.
+    let sections = (0..MAX_SECTIONS as usize).map(payload);
+    payloads.extend(
+        sections
+            .filter(|name| path.join(name).is_file())
+            .map(|name| (name, io::COMMON_CAP)),
+    );
     Ok(payloads)
 }
 
 pub(super) fn checkpoint_hash(path: &Path, geometry: Geometry) -> Result<String> {
     let mut hashes = BTreeMap::new();
-    for (name, cap) in payloads(geometry)? {
+    for (name, cap) in payloads(path, geometry)? {
         let hash = io::hash(&path.join(&name), cap)?;
         hashes.insert(name, hash);
     }
@@ -98,7 +107,7 @@ pub(super) fn checkpoint_hash(path: &Path, geometry: Geometry) -> Result<String>
 pub(super) fn snapshot(source: &Path, target: &Path, geometry: Geometry) -> Result<String> {
     std::fs::create_dir_all(target.join("tiles"))?;
     let mut hashes = BTreeMap::new();
-    for (name, cap) in payloads(geometry)? {
+    for (name, cap) in payloads(source, geometry)? {
         let hash = io::copy(&source.join(&name), &target.join(&name), cap)?;
         hashes.insert(name, hash);
     }

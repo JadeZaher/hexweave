@@ -3,6 +3,7 @@
 use super::connected_config::Options;
 use super::connected_gain::Gain;
 use super::connected_predictor::Predictor;
+use super::connected_sections;
 use super::connected_signal::Memory;
 use super::connected_wave::Waves;
 use super::cursor::Cursor;
@@ -89,6 +90,8 @@ pub(super) struct State {
     pub restarts: Option<Vec<super::connected_restart::TileRestart>>,
     /// Per-tile visit-balance estimates, present exactly when `options.balance` is.
     pub balance: Option<super::connected_balance::Estimate>,
+    /// Shared sections and their queue, present exactly when `options.shared` is.
+    pub sections: Option<super::connected_sections::Sections>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -122,6 +125,8 @@ struct Record {
     restarts: Option<Vec<super::connected_restart::TileRestart>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     balance: Option<super::connected_balance::Estimate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shared: Option<super::connected_sections::Saved>,
 }
 
 impl AdamRecord {
@@ -166,6 +171,7 @@ impl State {
             reach: Default::default(),
             restarts: super::connected_restart::fresh(options),
             balance: super::connected_balance::fresh(options),
+            sections: super::connected_sections::fresh(geometry, seed, options)?,
         };
         if options.precision == super::connected_precision::Precision::Fp32 {
             state.shared_latent = Some(super::connected_adam::fresh(
@@ -205,11 +211,12 @@ impl State {
                 .ok_or_else(|| anyhow::anyhow!("missing FP32 shared master"))?;
             super::connected_precision::attach_shared(&mut self.shared, latent, mode)?;
         }
-        Ok(())
+        super::connected_sections::attach_view(&mut self.sections, self.options.precision, mode)
     }
 
     pub fn payloads(&self) -> Result<BTreeMap<String, Vec<u8>>> {
         self.validate()?;
+        let (sections, shared) = super::connected_sections::save(self)?;
         let record = Record {
             schema: 1,
             geometry: self.geometry,
@@ -229,11 +236,14 @@ impl State {
             counters: self.counters.clone(),
             restarts: self.restarts.clone(),
             balance: self.balance.clone(),
+            shared,
         };
-        Ok(BTreeMap::from([
+        let mut payloads = BTreeMap::from([
             ("connected.json".into(), serde_json::to_vec(&record)?),
             ("shared.bin".into(), encode_shared(&self.shared)?),
-        ]))
+        ]);
+        payloads.extend(sections);
+        Ok(payloads)
     }
 
     pub fn restore(
@@ -241,14 +251,12 @@ impl State {
         geometry: Geometry,
         seed: u64,
     ) -> Result<Self> {
-        ensure!(
-            payloads.len() == 2,
-            "unexpected connected checkpoint payloads"
-        );
         let raw = payloads
             .get("connected.json")
             .ok_or_else(|| anyhow::anyhow!("missing connected state"))?;
         let record: Record = serde_json::from_slice(raw)?;
+        let expected = 2 + connected_sections::count(&record.options);
+        ensure!(payloads.len() == expected, "unexpected connected payloads");
         ensure!(
             record.schema == 1 && record.geometry == geometry && record.seed == seed,
             "connected state identity mismatch"
@@ -258,6 +266,8 @@ impl State {
             .ok_or_else(|| anyhow::anyhow!("missing connected embedding"))?;
         let mut shared = decode_shared(packed, geometry, record.shared_version)?;
         shared.bias = Some(record.bias);
+        let sections =
+            connected_sections::load(payloads, record.shared, geometry, &record.options)?;
         let mut state = Self {
             geometry,
             options: record.options,
@@ -278,6 +288,7 @@ impl State {
             reach: Default::default(),
             restarts: record.restarts,
             balance: record.balance,
+            sections,
         };
         state.attach_view(super::connected_precision::View::Fp32)?;
         state.validate()?;
