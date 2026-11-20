@@ -237,3 +237,22 @@ What three rounds established, on seed 7 at 7 tiles:
 
 Options for the owner are in the session report of 2026-11-19; the default recommendation is to
 take Lambert plasticity as the base recipe into the 19-tile test of the growth spec.
+
+### Round 4 (2026-11-19/20): the remaining differences, by owner direction
+
+The owner chose to test the two untested differences before the 19-tile work. Pilots of 30 minutes
+against the constant-rate base (3.900, 3.756, 3.570, 3.674, 3.459; mean 3.672), on the build from
+the commit that added `memory_lag` and `visit_norm`.
+
+| Pilot | Readings | Mean | Visit shares, % | Outcome |
+| :--- | :--- | ---: | :--- | :--- |
+| `precision: ternary` (forward numerics) | 4.467, 4.178, 3.969, 3.895 | 4.127 (base 3.725 over the same four) | 9, 17, 5, 32, 34, 1, 1 | Clearly worse. Dropped. |
+| `visit_norm: false` | 4.130, 3.841, 3.798, 3.745, 3.622 | 3.827 | 6, 3, 4, 48, 2, 35, 2 | Worse by about 0.15; visit RMS maximum rose to 8.46 (3.6–4.4 with normalization). Dropped. |
+| `memory_lag: 8` | 4.062, 3.747, 3.582, 3.724, 3.543 | 3.732 | 34, 4, 4, 48, 5, 3, 2 | Neutral. Reads retrieved 12.1 records at mean lag 3.2 (3.7 records at lag 1 before), so the wider window was used and did not help. Not promoted. |
+| `memory_lag: 8` with `balance.memory` | 4.148, 3.818, 3.725, 3.741, 3.620 | 3.810 | 22, 12, 3, 43, 12, 4, 4 | Slightly worse (16.7 records per read, mean lag 3.6). Not promoted. |
+
+Neither remaining difference explains the gap to the reference path; the reference path's ternary
+forward and its lack of per-visit normalization both cost quality when applied to the connected
+path. With this, every difference identified in the code comparison has been tested, and none
+other than the tile-rate schedule moves the 7-tile curve. The 7-tile search ends here; work moves
+to Phase 1 of `connected-v6-growth-gpu-2026-11-16.md` with Lambert plasticity as the base recipe.
