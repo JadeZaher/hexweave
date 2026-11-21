@@ -96,6 +96,34 @@ Follow-up chosen by the owner (2026-11-20): shared tile-sized sections with a pr
 and a teaching path, applied on the wave pattern. Its first pilots run at 19 tiles with all tiles
 resident, to keep disk traffic out of the comparison.
 
+### Shared-section pilots (2026-11-20): Lambert-mix write with the queue kept
+
+Follow-up to the Phase 1 result: `connected.shared` (CONNECTED.md §Shared sections), 2 sections,
+wave 8, at 19 tiles all resident, seed 7, compared with arm B at matched positions (mean of the
+last four evaluations, 4,096 bytes each). One seed per arm.
+
+| Arm | `shared` | Positions | Held-out | Arm B, same positions | Score with the read off | Positions/s |
+| :--- | :--- | ---: | ---: | ---: | :--- | ---: |
+| Mix | `{sections 2, wave 8}` | 173,224 | 2.766 | 2.949 | 0.10 to 0.20 worse | 18.5 to 19.8 |
+| Entry | `credit: entry` | 128,560 | 3.023 | 3.017 | about 0.03 worse | 20.9 |
+| No queue | `queue: false` | 122,880 | 2.969 | 3.024 | no change | 20.1 |
+| Teaching | `teach: 0.05` | 94,232 | 3.026 | 3.131 | 0.6 to 1.6 worse | 15.2 |
+
+- Mix was ahead of arm B at every evaluation; the lead was 0.11 at 122,000 positions and 0.18 at
+  173,000. Mix at the positions of the last three rows: 2.930 (no queue), 3.019 (teaching).
+- No queue is 0.04 behind mix at the end and was 0.1 to 0.27 behind before 90,000 positions. Writes
+  stayed even without the queue (7,668 / 7,692), so the queue's effect is not write balance.
+- Teaching equals mix per position, is 25% slower, and makes the tiles depend on the read.
+- Risk monitors (mix, 173,000): writes 10,824 / 10,829; tile similarity 0.05; centre-tile mean
+  plasticity 1.11 (lowest tile); 6 of 19 tiles under 1% of visits (arm B: 9); `read_delta` rose
+  0.69 to 1.00 without levelling off; `credit_alignment` 0.78.
+- Sampled text (`work/inference/shared-pilots-20261120/`, nucleus T0.8 p0.9, real-word share): arm B
+  0.735 at 179,015; mix 0.697 at 173,224 (0.573 at 122,616); no queue 0.568; teaching 0.592;
+  entry 0.555. No arm improves sampled text over arm B yet.
+- Kept: mix (checkpoints) and teaching (checkpoints). Entry and no-queue weights deleted.
+- Open: a second seed for mix; whether `read_delta` needs a cap in a longer run; entry credit
+  without the 1/K scaling, to separate step size from direction.
+
 ## Phase 2: dynamic tile count by cloning
 
 **Question:** can the model add capacity where it is needed without a relearning dip?
