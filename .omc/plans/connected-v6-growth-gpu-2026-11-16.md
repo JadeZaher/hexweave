@@ -124,6 +124,33 @@ last four evaluations, 4,096 bytes each). One seed per arm.
 - Open: a second seed for mix; whether `read_delta` needs a cap in a longer run; entry credit
   without the 1/K scaling, to separate step size from direction.
 
+#### Six-hour extension (2026-11-21): mix and arm B, 6 hours of wall time each
+
+Same configs and seed, resumed from their checkpoints. Arm B was stopped once near mix's final
+position for a matched text score (it stopped at 315,220, 5% short of 331,096).
+
+| Comparison | Mix | Arm B | Difference |
+| :--- | ---: | ---: | :--- |
+| Positions after 6 hours | 331,096 | 457,261 | arm B 38% more |
+| Held-out, last four evaluations, mix's positions (311k to 331k) | 2.599 | 2.669 | mix 0.07 better |
+| Held-out, last four evaluations at 6 hours | 2.599 | 2.539 | arm B 0.06 better |
+| Best single evaluation | 2.548 | 2.498 | arm B |
+| Real-word share, nucleus, matched positions (331,096 / 315,220) | 0.768 | 0.760 | level |
+| Real-word share, nucleus, 6 hours | 0.768 | 0.859 | arm B |
+| Greedy samples that loop, matched positions | 0 of 4 | 4 of 4 | mix |
+
+- Per position mix stays ahead at every evaluation, but the lead shrank: four-evaluation means
+  0.19 (147k to 172k), 0.17, 0.08, 0.10, 0.07, 0.10 (295k to 319k).
+- Per hour arm B wins: mix ran 16.8 positions/s in its last leg against 21.7 for arm B.
+- Sampled text at matched positions is level; the loss lead did not become better text.
+- Risk monitors (mix, 331,096): writes 20,698 / 20,689; tile similarity 0.055; score with the read
+  off 0.08 to 0.16 worse; `read_delta` 1.00 at 177k, 1.05 at 241k, 1.09 at 331k (slowing, not
+  flat); `credit_alignment` 0.78 throughout; centre-tile mean plasticity 1.15; 6 of 19 tiles under
+  1% of visits (arm B: 8); top tile 28.6% of visits (arm B 39.7%); no restarts in either run.
+- Decision input: the shared read passes the 0.05 keep rule per position and fails it per hour.
+  It is worth keeping only if its cost per position falls (it adds a 2-section forward at every
+  route entry and a write every 8 positions) or if the gain grows with more sections.
+
 ## Phase 2: dynamic tile count by cloning
 
 **Question:** can the model add capacity where it is needed without a relearning dip?
