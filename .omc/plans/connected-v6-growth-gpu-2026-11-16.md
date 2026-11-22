@@ -151,6 +151,49 @@ position for a matched text score (it stopped at 315,220, 5% short of 331,096).
   It is worth keeping only if its cost per position falls (it adds a 2-section forward at every
   route entry and a write every 8 positions) or if the gain grows with more sections.
 
+### Context reach (2026-11-22): the model reads about four bytes
+
+`hexweave reach` (CONNECTED.md §Context reach) on the two 6-hour checkpoints, 32 held-out spans
+(4,096 bytes). Only the newest k bytes of each 512-byte window are true; bits per byte.
+
+| True bytes kept | Arm B overall | Arm B, first letter of a word | Mix overall | Mix, first letter |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 4.98 | 5.52 | 4.76 | 5.64 |
+| 2 | 3.62 | 4.73 | 3.46 | 4.70 |
+| 4 | 2.69 | 4.30 | 2.78 | 4.36 |
+| 8 | 2.62 | 4.22 | 2.71 | 4.21 |
+| 32 | 2.58 | 4.25 | 2.67 | 4.17 |
+| 512 | 2.55 | 4.24 | 2.66 | 4.15 |
+
+- Four bytes give 94% of the whole window's benefit; 8 to 512 bytes adds 0.07 (arm B).
+- The first letter of a word stays near 4.2 from 8 bytes on (context-free guessing is 4.414):
+  word choice is almost unconditioned. Letters inside a word reach 2.2 to 2.7.
+- Only spaces and punctuation use long context (arm B 1.68 at 8 bytes, 1.45 at 512).
+- The shared read does not change the shape.
+- Cause (design, not measured): a window row is one byte plus its position
+  (`Shared::prefix`), never rewritten; only the newest position is routed, for at most four visits.
+
+### Context plan (proposed 2026-11-22, not approved, nothing built)
+
+One change per run, each compared with arm B at matched positions and matched hours (keep rule
+0.05), and each rescored with `hexweave reach`. The target number is first-letter loss.
+
+1. **Contextual rows, no writer credit.** A window row becomes the byte row plus the routed
+   output state from when that byte was the newest position (a ring buffer of the last `window`
+   states; rows before the buffer fills stay raw). Evaluation and generation fill the buffer the
+   same way. Monitors: positions/s, each row's writer drift ratio (`TileSignal` distance / bar),
+   reach curve.
+2. **Provenance and one-hop exact credit** to the tile that wrote a row; report agreement with a
+   full multi-hop pass on a fixture.
+3. **Window 512 to 1,023**, only after rows carry context.
+4. **Short-range region**: a summary of the previous few bytes per position as a second shared
+   context with its own Lambert dial.
+5. **Learned looped credit state**, only if step 2 shows one-hop credit loses much against exact
+   multi-hop credit; trained against those exact signals.
+
+Open before step 1: how the state is combined with the byte row (sum then RMS, or a learned
+mix); behaviour under anchor waves, where tiles are frozen over a wave; checkpointing the buffer.
+
 ## Phase 2: dynamic tile count by cloning
 
 **Question:** can the model add capacity where it is needed without a relearning dip?
