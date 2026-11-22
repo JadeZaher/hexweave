@@ -173,7 +173,7 @@ position for a matched text score (it stopped at 315,220, 5% short of 331,096).
 - Cause (design, not measured): a window row is one byte plus its position
   (`Shared::prefix`), never rewritten; only the newest position is routed, for at most four visits.
 
-### Context plan (proposed 2026-11-22, not approved, nothing built)
+### Context plan (step 1 approved and built 2026-11-22; it failed its pilot; steps 2 to 5 not approved)
 
 One change per run, each compared with arm B at matched positions and matched hours (keep rule
 0.05), and each rescored with `hexweave reach`. The target number is first-letter loss.
@@ -193,6 +193,40 @@ One change per run, each compared with arm B at matched positions and matched ho
 
 Open before step 1: how the state is combined with the byte row (sum then RMS, or a learned
 mix); behaviour under anchor waves, where tiles are frozen over a wave; checkpointing the buffer.
+
+#### Step 1 pilot (2026-11-22): contextual rows fail the keep rule
+
+Run `connected-fp32-v62-context-19t-s7-20261122`: arm B's config and seed with
+`connected.context_rows` on, 16 evaluation spans (a subset of arm B's 32, compared span for
+span), evaluation every 16,384 positions. Two legs, 169,464 positions, 2.90 training hours. One
+seed. Code at commit 546f6cf.
+
+| Measure | Contextual rows | Arm B |
+| :--- | ---: | ---: |
+| Held-out, same 16 spans, at 114,688 / 131,072 / 147,456 / ~170k | 3.80 (mean) | 3.15 (mean) |
+| Held-out at 2.9 training hours | 3.56 (16 spans, 169,464 pos.) | 2.72 (32 spans, 262,144 pos.) |
+| Held-out at 16,384 positions, same 16 spans | 3.76 | 3.74 |
+| Positions per training second | about 17 | about 28 |
+| Evaluation time | 75 to 400 s (one partial) | 32 s |
+| Sampled text, real-word share (nucleus) | 0.57 at 169,464 (0.81 at 135,555) | 0.74 at 179,015 |
+| Sampled text, mean word length (nucleus) | 2.67 | 3.27 |
+| Greedy text | "The The The The" | varied, no loops |
+
+- Loss matched arm B at 16,384 positions, then stopped improving: 3.76 to 3.56 over 150,000
+  positions, while arm B went 3.74 to 3.08. Evaluations swing by up to 0.5 between stops.
+- `context.state_to_row_rms` stayed near 1.0 and `filled_share` at 1.0: the added state is as
+  large as the byte and position signal in every row, and it is detached and written by weights
+  that keep changing.
+- Reach on the final checkpoint (bits/byte): 1 byte 4.48, 4 bytes 3.78, 32 bytes 3.65, 256 bytes
+  3.52, full window 3.56. The curve keeps falling out to 256 bytes, so the rows do carry distant
+  information, but short-range precision is lost (arm B reaches 2.69 with four bytes, at a later
+  checkpoint). First-letter loss is 5.5, worse than context-free. With the option on, reach no
+  longer isolates raw bytes, and no arm B reach exists at this position.
+- Not shown: why. The leading guess is that a full-strength, drifting, uncredited state swamps the
+  byte identity. A down-weighted state (a fixed or learned mix) is the cheapest test of that guess;
+  step 2 (credit to the writer) is the other. Neither is approved.
+- Checkpoints and tile files of the run were deleted; logs, reports and scores are kept under
+  `work/core-runs/` and `work/inference/context-pilot-20261122/`.
 
 ## Phase 2: dynamic tile count by cloning
 
