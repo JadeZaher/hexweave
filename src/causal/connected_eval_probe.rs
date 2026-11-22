@@ -16,9 +16,9 @@ pub(super) const RETENTION_OFFSETS: [u64; 6] = [0, 1024, 4096, 16384, 65536, 262
 
 pub(super) struct Probe {
     offset: u64,
-    bytes: Vec<u8>,
-    first: usize,
-    scored: usize,
+    pub(super) bytes: Vec<u8>,
+    pub(super) first: usize,
+    pub(super) scored: usize,
     first_observed_at: Option<u64>,
 }
 

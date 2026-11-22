@@ -1384,6 +1384,24 @@ to training or an isolated test of a single evidence weight. Repetition alone
 does not identify a decoder bug: the reported logits must establish whether the
 selected byte is the model's actual maximum.
 
+### Context reach
+
+`hexweave reach --config <run.json> --checkpoint <aNNNNNNNNNNNN> [--spans 32]` is a read-only
+diagnostic on the same snapshot path as completion (`connected_completion_reach`,
+`connected_eval_reach`). For each retained length k in 1, 2, 3, 4, 8, 16, 32, 64, 128, 256 below
+the window, then the full window, it rescores the standard held-out probes with only the newest k
+bytes of every window left true; each older position holds a byte of another held-out span
+(Khandelwal et al. 2018, arXiv:1805.04623, perturb distant context). The window stays full
+length, so the newest byte keeps its trained position. Rows report bits per byte overall and by
+target class: the first, second, third and later bytes of a run of ASCII letters, and every other
+byte. The full-window row must equal the standard held-out score or the command fails.
+
+Scope: only the prefix rows are perturbed. The replay's event memory still carries records of the
+preceding scored positions, so a row measures what the prefix beyond k bytes adds, not the
+model's total reach; small-k rows are therefore a lower bound on the loss at truly k bytes. The
+replacement text comes from a span at least half the probes away that fills a whole window, so
+it is never cycled when one exists.
+
 ## Full-run measurements
 
 The optional `connected_eval` object configures assessment time, retention probe

@@ -202,6 +202,20 @@ pub fn complete(
     })
 }
 
+/// Held-out loss by retained context length for a connected checkpoint; see CONNECTED.md.
+pub fn context_reach(
+    config: &std::path::Path,
+    checkpoint: &str,
+    spans: usize,
+) -> anyhow::Result<serde_json::Value> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| connected_completion::reach_path(config, checkpoint, spans))
+            .join()
+            .map_err(|_| anyhow::anyhow!("context reach thread panicked"))?
+    })
+}
+
 /// Complete with a chosen decoder; connected checkpoints also take bounded decoder diagnostics.
 #[allow(clippy::too_many_arguments)]
 pub fn complete_audit(

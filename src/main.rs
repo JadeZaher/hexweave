@@ -5,7 +5,7 @@ use std::path::Path;
 
 mod causal_cli;
 
-const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave causal plan\nhexweave train --config <core-run.json>\nhexweave complete --config <core-run.json> --checkpoint <aNNNNNNNNNNNN> --prompt <text> [--max-new-bytes 160] [--top-p P [--temperature 1.0] [--seed 0]] [--trace-bytes 0..16] [--feedback generated|prompt-only] [--quantize-audit]";
+const USAGE: &str = "hexweave plan --config <path>\nhexweave smoke [--steps 4] [--seed 7]\nhexweave causal plan\nhexweave train --config <core-run.json>\nhexweave complete --config <core-run.json> --checkpoint <aNNNNNNNNNNNN> --prompt <text> [--max-new-bytes 160] [--top-p P [--temperature 1.0] [--seed 0]] [--trace-bytes 0..16] [--feedback generated|prompt-only] [--quantize-audit]\nhexweave reach --config <core-run.json> --checkpoint <aNNNNNNNNNNNN> [--spans 32]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         }
         Some("train") => train(&args[1..])?,
         Some("complete") => complete(&args[1..])?,
+        Some("reach") => reach(&args[1..])?,
         Some(command) => bail!("unknown command {command:?}\n{USAGE}"),
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
@@ -113,6 +114,23 @@ fn complete(args: &[String]) -> Result<serde_json::Value> {
         quantize,
         decoder,
     )
+}
+
+fn reach(args: &[String]) -> Result<serde_json::Value> {
+    let (mut config, mut checkpoint, mut spans) = (None, None, None);
+    for pair in args.chunks(2) {
+        match (pair[0].as_str(), pair.get(1)) {
+            ("--config", Some(value)) if config.is_none() => config = Some(value),
+            ("--checkpoint", Some(value)) if checkpoint.is_none() => checkpoint = Some(value),
+            ("--spans", Some(value)) if spans.is_none() => {
+                spans = Some(value.parse().context("invalid spans")?)
+            }
+            _ => bail!("expected reach --config <path> --checkpoint <name> [--spans N]"),
+        }
+    }
+    let config = config.context("reach needs --config")?;
+    let checkpoint = checkpoint.context("reach needs --checkpoint")?;
+    hexweave::causal::context_reach(Path::new(config), checkpoint, spans.unwrap_or(32))
 }
 
 fn train(args: &[String]) -> Result<serde_json::Value> {

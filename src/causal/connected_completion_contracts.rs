@@ -3,13 +3,13 @@
 use super::super::{connected_config, connected_step};
 use super::*;
 
-struct Fixture {
-    config: Config,
+pub(super) struct Fixture {
+    pub(super) config: Config,
     root: io::Scratch,
-    name: String,
+    pub(super) name: String,
 }
 
-fn fixture() -> Result<Fixture> {
+pub(super) fn fixture() -> Result<Fixture> {
     fixture_precision(super::super::connected_precision::Precision::Ternary)
 }
 

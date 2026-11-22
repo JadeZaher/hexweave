@@ -21,6 +21,9 @@ mod contracts;
 mod fixture;
 #[path = "connected_completion_io.rs"]
 mod io;
+#[path = "connected_completion_reach.rs"]
+mod reach;
+pub(super) use reach::reach_path;
 #[cfg(all(test, feature = "tiles19"))]
 #[path = "connected_tiles19_contracts.rs"]
 mod tiles19;

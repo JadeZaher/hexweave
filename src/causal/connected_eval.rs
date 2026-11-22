@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 mod contracts;
 #[path = "connected_eval_probe.rs"]
 mod probe;
+#[path = "connected_eval_reach.rs"]
+mod reach;
 #[path = "connected_eval_replay.rs"]
 mod replay;
 
@@ -236,6 +238,26 @@ pub(super) fn frozen_histories(
     bytes: &[u8],
 ) -> Result<Vec<Vec<f32>>> {
     replay::Replay::new(state, store)?.histories(observed, bytes)
+}
+
+/// Held-out loss by retained context length within a deadline; see CONNECTED.md §Context reach.
+pub(super) fn context_reach(
+    state: &State,
+    store: &mut Store,
+    corpus: &Corpus,
+    spans: usize,
+    window: usize,
+    until: Duration,
+) -> Result<Value> {
+    let budget = Budget {
+        started: Instant::now(),
+        until,
+        out: None,
+    };
+    let probes = probe::heldout(corpus, spans);
+    let standard = probe::score(state, store, &probes, window, &budget)?;
+    let standard = standard["bits_per_byte"].as_f64();
+    reach::measure(state, store, &probes, window, &budget, standard)
 }
 
 /// Frozen-weight generation of `prompt` after `context` within a deadline.
