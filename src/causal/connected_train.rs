@@ -39,6 +39,8 @@ pub(super) fn run(config: &Config) -> Result<Value> {
     let (mut state, mut store) = open(config, &corpus, options, &identity)?;
     store.set_paging(options.resident(), options.write_behind_tiles)?;
     corpus.validate(&state.cursor)?;
+    // The contextual-row buffer is never checkpointed: a resume recomputes it (CONNECTED.md).
+    super::connected_context::refill(&mut state, &mut store, &corpus)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

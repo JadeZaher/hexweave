@@ -109,12 +109,13 @@ pub(super) fn score_with(
         };
         if !budget.interrupted() {
             let mut replay = Replay::with_read(state, store, read)?;
-            for t in probe.first.saturating_sub(2)..probe.first + probe.scored {
+            let start = observed_from(&replay, &probe.bytes, probe.first, window);
+            for t in start..probe.first + probe.scored {
                 if budget.interrupted() {
                     break;
                 }
-                let value =
-                    replay.score(&window_before(&probe.bytes, t, window), probe.bytes[t])?;
+                let bytes = window_before(&probe.bytes, t, window);
+                let value = replay.score_at(&bytes, probe.bytes[t], t as u64, 0)?;
                 if t >= probe.first {
                     result.nll_sum += f64::from(value);
                     result.scored_targets += 1;
@@ -134,6 +135,32 @@ pub(super) fn score_with(
         "bits_per_byte": bits(loss, targets), "partial": targets != requested,
         "probes": scores}),
     )
+}
+
+/// First observed position of a probe scored from `first`: two before it, or a full window of
+/// true bytes earlier under contextual rows (the warm-up; CONNECTED.md §Contextual rows).
+pub(super) fn observed_from(
+    replay: &Replay<'_>,
+    bytes: &[u8],
+    first: usize,
+    window: usize,
+) -> usize {
+    let start = first.saturating_sub(2);
+    replay.observed_from(start, window_before(bytes, start, window).len())
+}
+
+/// Test probe over `bytes` scoring `scored` targets from `first`.
+#[cfg(test)]
+pub(super) fn span(bytes: &[u8], first: usize, scored: usize) -> Probe {
+    let (offset, bytes) = (first as u64, bytes.to_vec());
+    let first_observed_at = None;
+    Probe {
+        offset,
+        bytes,
+        first,
+        scored,
+        first_observed_at,
+    }
 }
 
 /// Route-entry states `tile_similarity` samples: round-robin over the probes' scored positions.

@@ -83,6 +83,10 @@ Optional `connected.shared` (absent by default, identity when present; experimen
 written once per shared wave (write credit `mix` of the visited tiles' corrections or `entry`,
 the exact read adjoint; `teach` pulls at a tile's own adjoint scale); see
 [shared sections](CONNECTED.md#shared-sections).
+`connected.context_rows` (default false, identity when true; experimental, `anchor_exact` and
+`anchor_batch` 1 only, refused with `shared` and replays) adds each older prefix row's detached
+routed state from a session-only buffer; frozen replays warm it (and their scratch memory) by
+observing a window of true context, and resume refills it forward-only; see [contextual rows](CONNECTED.md#contextual-rows).
 
 Connected checkpoint completion uses `connected_completion` and frozen evaluation
 replay. It snapshots the exact named checkpoint into owned `work/inference/`

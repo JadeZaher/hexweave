@@ -109,12 +109,11 @@ pub(super) fn forward<S: TrainingSource>(
     revisions: &[u64; TILES],
 ) -> Result<(Vec<u8>, Prefix, Trace)> {
     let bytes = source.pending_prefix(&state.cursor)?;
-    let prefix = state.shared.prefix(&bytes)?;
+    let prefix = super::connected_context::anchor_prefix(state, &bytes)?;
     // Sections change only at shared-wave ends, so this read uses completed waves' weights.
     let sections = state.sections.as_ref();
     let entry = super::connected_sections_read::entry(sections, state.geometry, &prefix)?;
-    let random = tuning::hash(state.seed, &[state.anchors, 0x414e4348]);
-    let draw = super::connected_route::draw(&options, state, &[state.anchors], random);
+    let draw = super::connected_route::anchor(&options, state, state.anchors);
     let trace = connected_anchor::forward_from(
         store,
         state.geometry,
@@ -124,6 +123,7 @@ pub(super) fn forward<S: TrainingSource>(
         draw,
         |tile, input| super::connected_reach::anchor_read(state, input, tile, revisions, &options),
     )?;
+    super::connected_context::push_anchor(state, &trace);
     Ok((bytes, prefix, trace))
 }
 

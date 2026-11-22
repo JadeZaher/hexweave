@@ -1,4 +1,5 @@
-//! Connected-state consistency at quiescent boundaries; see CONNECTED.md.
+//! Connected-state consistency at quiescent boundaries and the fresh readout prior; see
+//! CONNECTED.md.
 
 use super::{State, TILES, VOCAB};
 use anyhow::{ensure, Result};
@@ -89,8 +90,31 @@ impl State {
         super::super::connected_wave::validate_state(self)?;
         super::super::connected_balance::validate(self)?;
         super::super::connected_sections::validate(self)?;
+        ensure!(
+            self.context.is_some() == self.options.context_rows,
+            "connected contextual-row buffer/options mismatch"
+        );
         self.validate_bias()?;
         self.validate_shared()
+    }
+
+    /// Set a fresh run's readout bias (VOCAB log-probabilities) and its entropy as the baseline.
+    pub fn install_readout_prior(&mut self, prior: &[f32]) -> Result<()> {
+        ensure!(
+            self.anchors == 0 && self.bias_latent.is_none(),
+            "connected readout prior after training began"
+        );
+        super::super::norm::vector(prior, VOCAB)?;
+        // -sum exp(p) p: the expected loss of predicting the prior itself; see CONNECTED.md v4.
+        let entropy: f64 = prior
+            .iter()
+            .map(|&p| -f64::from(p).exp() * f64::from(p))
+            .sum();
+        let baseline = entropy as f32;
+        ensure!(baseline.is_finite(), "nonfinite connected readout prior");
+        self.shared.bias = Some(prior.to_vec());
+        self.baseline = baseline;
+        Ok(())
     }
 
     fn validate_shared(&self) -> Result<()> {

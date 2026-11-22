@@ -21,6 +21,7 @@ mod connected_checkpoint;
 mod connected_checkpoint_io;
 mod connected_completion;
 mod connected_config;
+mod connected_context;
 mod connected_decode;
 mod connected_eval;
 mod connected_eval_config;
@@ -125,6 +126,8 @@ mod assay_contracts;
 mod attention_contracts;
 #[cfg(test)]
 mod connected_bias_contracts;
+#[cfg(test)]
+mod connected_context_gradient_contracts;
 #[cfg(test)]
 mod connected_contracts;
 #[cfg(test)]

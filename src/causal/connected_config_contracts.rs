@@ -54,6 +54,7 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("route_explore", json!(0.0)),
         ("memory_lag", json!(1)),
         ("visit_norm", json!(true)),
+        ("context_rows", json!(false)),
     ] {
         let mut same = base.clone();
         same["connected"][key] = value;
@@ -144,6 +145,7 @@ fn connected_identity_and_admission_cover_execution_policy() -> Result<()> {
         ("memory_lag", json!(0)),
         ("memory_lag", json!(65)),
         ("replay", json!({"capacity":64,"per_anchor":2})),
+        ("context_rows", json!(true)),
         ("restart", json!({"floor":-0.1})),
         ("restart", json!({"floor":1.5})),
         ("restart", json!({"floor":0.1,"threshold":0.0})),

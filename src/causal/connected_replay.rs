@@ -11,6 +11,14 @@ use anyhow::{ensure, Result};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 
+/// `connected.replay`: buffer `capacity` and replayed anchors `per_anchor`.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Replay {
+    pub capacity: usize,
+    pub per_anchor: usize,
+}
+
 /// Route-sampling salt for replayed anchors ("REPL").
 const REPLAY_SALT: u64 = 0x5245_504c;
 

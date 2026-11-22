@@ -6,6 +6,7 @@ use super::geometry::TILES;
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
+pub(super) use super::connected_replay::Replay;
 pub(super) use super::connected_restart_config::Restart;
 pub(super) use super::connected_route::RouteTraining;
 
@@ -111,14 +112,9 @@ pub(super) struct Options {
     /// EXPERIMENT: pinned shared sections read at every route entry (CONNECTED.md §Shared sections).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared: Option<super::connected_sections::SharedOptions>,
-}
-
-/// Bounded prioritized replay: buffer `capacity` and replayed anchors `per_anchor`.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Replay {
-    pub capacity: usize,
-    pub per_anchor: usize,
+    /// EXPERIMENT: older prefix rows add their position's detached routed state (CONNECTED.md).
+    #[serde(skip_serializing_if = "super::connected_context::is_off")]
+    pub context_rows: bool,
 }
 
 fn is_true(value: &bool) -> bool {
@@ -155,6 +151,7 @@ impl Default for Options {
             memory_lag: 1,
             visit_norm: true,
             shared: None,
+            context_rows: false,
         }
     }
 }
@@ -213,6 +210,7 @@ impl Options {
         self.balance
             .map_or(Ok(()), |balance| balance.validate(self.credit_mode))?;
         super::connected_sections::validate_options(self)?;
+        super::connected_context::validate(self)?;
         self.validate_paging_and_replay()
     }
 

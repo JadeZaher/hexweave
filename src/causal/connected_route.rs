@@ -71,6 +71,16 @@ pub(super) fn lane(options: &Options, state: &State, index: usize, depth: usize)
     }
 }
 
+/// The live anchor's route draw (salt "ANCH"), also taken by the contextual-row resume refill.
+pub(super) fn anchor(options: &Options, state: &State, anchor: u64) -> Draw {
+    draw(
+        options,
+        state,
+        &[anchor],
+        tuning::hash(state.seed, &[anchor, 0x414e_4348]),
+    )
+}
+
 /// One training pass's route draw: `random`'s choice plus any visit-balance bonus.
 pub(super) fn draw(options: &Options, state: &State, key: &[u64], seed: u64) -> Draw {
     Draw {

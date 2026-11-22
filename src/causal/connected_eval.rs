@@ -11,6 +11,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
+#[path = "connected_context_contracts.rs"]
+mod context_contracts;
+#[cfg(test)]
 #[path = "connected_eval_contracts.rs"]
 mod contracts;
 #[path = "connected_eval_probe.rs"]

@@ -67,12 +67,16 @@ pub(super) fn measure(
         for (index, probe) in probes.iter().enumerate() {
             let foreign = foreign(probes, index, window);
             let mut replay = Replay::new(state, store)?;
-            for t in probe.first.saturating_sub(2)..probe.first + probe.scored {
+            let start = super::probe::observed_from(&replay, &probe.bytes, probe.first, window);
+            for t in start..probe.first + probe.scored {
                 if budget.interrupted() {
                     bail!("context reach deadline reached at context {keep}");
                 }
-                let bytes = splice(&window_before(&probe.bytes, t, window), foreign, keep);
-                let value = replay.score(&bytes, probe.bytes[t])?;
+                // The contextual-row warm-up reads true bytes; foreign rows never take a true state.
+                let kept = if t + 2 < probe.first { window } else { keep };
+                let bytes = splice(&window_before(&probe.bytes, t, window), foreign, kept);
+                let foreign_rows = bytes.len().saturating_sub(kept);
+                let value = replay.score_at(&bytes, probe.bytes[t], t as u64, foreign_rows)?;
                 if t >= probe.first {
                     let class = class(&probe.bytes, t);
                     sums[class] += f64::from(value);

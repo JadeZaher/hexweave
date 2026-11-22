@@ -264,6 +264,12 @@ fn connected_completion_accepts_a_checkpoint_trained_with_paging_controls() -> R
     })?;
     let result = complete_geometry(&fixture.config, &fixture.name, "X", 3, Geometry::fixture())?;
     assert_eq!(result["before_sha256"], result["after_sha256"]);
+    // Separate case: contextual rows' observed warm-up leaves the snapshot unchanged too.
+    let mut options = fixture.config.connected.context("connected")?;
+    (options.credit_mode, options.context_rows) = (connected_config::CreditMode::AnchorExact, true);
+    let rows = fixture_with(options)?;
+    let result = complete_geometry(&rows.config, &rows.name, "X", 3, Geometry::fixture())?;
+    assert_eq!(result["before_sha256"], result["after_sha256"]);
     Ok(())
 }
 

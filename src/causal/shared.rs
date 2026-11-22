@@ -95,6 +95,15 @@ impl Shared {
 
     /// Rebuild all visible embedding rows for this anchor, including overlapping positions.
     pub fn prefix(&self, bytes: &[u8]) -> Result<Prefix> {
+        self.prefix_with(bytes, |_, _| None)
+    }
+
+    /// `prefix`, row i adding `extra(i, raw row)` (a detached constant) before normalization.
+    pub fn prefix_with<'a>(
+        &self,
+        bytes: &[u8],
+        mut extra: impl FnMut(usize, &[f32]) -> Option<&'a [f32]>,
+    ) -> Result<Prefix> {
         ensure!(
             (1..=self.geometry.context).contains(&bytes.len()),
             "invalid visible prefix length"
@@ -104,6 +113,10 @@ impl Shared {
         for (position, &byte) in bytes.iter().enumerate() {
             let mut column = self.embedding_column(usize::from(byte))?;
             positions::add(position, &mut column)?;
+            // Contextual rows (CONNECTED.md): E's gradient through `norm::backward` stays exact.
+            if let Some(state) = extra(position, &column) {
+                norm::add(&mut column, state)?;
+            }
             let row = norm::rms(&column)?;
             memory.extend(row.values);
             inverse.push(row.inverse);

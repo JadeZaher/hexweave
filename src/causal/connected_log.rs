@@ -17,6 +17,7 @@ pub(super) struct Log {
     file: File,
     previous: Counters,
     previous_reach: super::super::connected_reach::Reach,
+    previous_context: super::super::connected_context::Tally,
     previous_anchors: u64,
     previous_seconds: f64,
     initial_anchors: u64,
@@ -37,6 +38,7 @@ impl Log {
             file,
             previous: state.counters.clone(),
             previous_reach: state.reach,
+            previous_context: super::super::connected_context::tally(state),
             previous_anchors: state.anchors,
             previous_seconds: 0.0,
             initial_anchors: state.anchors,
@@ -93,6 +95,11 @@ impl Log {
         if let Some(shared) = super::super::connected_sections::report(state)? {
             line["shared"] = shared;
         }
+        if let Some(context) =
+            super::super::connected_context::report(state, &self.previous_context)
+        {
+            line["context"] = context;
+        }
         add_scale(&mut line, state, &self.previous, interval_anchors);
         add_waves(&mut line, state, &self.previous);
         if let Some(prior) = self.readout_prior.take() {
@@ -102,6 +109,7 @@ impl Log {
         self.file.flush()?;
         self.previous = current.clone();
         self.previous_reach = state.reach;
+        self.previous_context = super::super::connected_context::tally(state);
         self.previous_anchors = state.anchors;
         self.previous_seconds = seconds;
         Ok(())

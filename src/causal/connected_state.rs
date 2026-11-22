@@ -92,6 +92,8 @@ pub(super) struct State {
     pub balance: Option<super::connected_balance::Estimate>,
     /// Shared sections and their queue, present exactly when `options.shared` is.
     pub sections: Option<super::connected_sections::Sections>,
+    /// Session-only contextual-row buffer, present exactly when `options.context_rows` is.
+    pub context: Option<super::connected_context::Context>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -172,6 +174,7 @@ impl State {
             restarts: super::connected_restart::fresh(options),
             balance: super::connected_balance::fresh(options),
             sections: super::connected_sections::fresh(geometry, seed, options)?,
+            context: super::connected_context::fresh(geometry, options),
         };
         if options.precision == super::connected_precision::Precision::Fp32 {
             state.shared_latent = Some(super::connected_adam::fresh(
@@ -182,25 +185,6 @@ impl State {
             state.attach_view(super::connected_precision::View::Fp32)?;
         }
         Ok(state)
-    }
-
-    /// Set a fresh run's readout bias (VOCAB log-probabilities) and its entropy as the baseline.
-    pub fn install_readout_prior(&mut self, prior: &[f32]) -> Result<()> {
-        ensure!(
-            self.anchors == 0 && self.bias_latent.is_none(),
-            "connected readout prior after training began"
-        );
-        super::norm::vector(prior, VOCAB)?;
-        // -sum exp(p) p: the expected loss of predicting the prior itself; see CONNECTED.md v4.
-        let entropy: f64 = prior
-            .iter()
-            .map(|&p| -f64::from(p).exp() * f64::from(p))
-            .sum();
-        let baseline = entropy as f32;
-        ensure!(baseline.is_finite(), "nonfinite connected readout prior");
-        self.shared.bias = Some(prior.to_vec());
-        self.baseline = baseline;
-        Ok(())
     }
 
     pub fn attach_view(&mut self, mode: super::connected_precision::View) -> Result<()> {
@@ -289,6 +273,7 @@ impl State {
             restarts: record.restarts,
             balance: record.balance,
             sections,
+            context: super::connected_context::fresh(geometry, &record.options),
         };
         state.attach_view(super::connected_precision::View::Fp32)?;
         state.validate()?;

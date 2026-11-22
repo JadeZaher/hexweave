@@ -1402,6 +1402,103 @@ model's total reach; small-k rows are therefore a lower bound on the loss at tru
 replacement text comes from a span at least half the probes away that fills a whole window, so
 it is never cycled when one exists.
 
+### Contextual rows
+
+EXPERIMENT, a hypothesis with no measurements (`.omc/plans/connected-v6-growth-gpu-2026-11-16.md`,
+"Context plan" step 1: contextual rows with no writer credit). Context reach showed trained
+checkpoints take 94% of their benefit from the newest 4 bytes, because a window row is only a
+byte plus its position (`Shared::prefix`) and only the newest position is routed.
+`connected.context_rows` (bool, default false) lets older rows carry what the routed stream
+computed there. Off is omitted from serialization and identity, so existing configs,
+checkpoints and golden trajectories are unchanged; `true` is run identity. Admission:
+`credit_mode: anchor_exact` and `anchor_batch` 1; refused with `connected.shared` (keeps the
+first pilot attributable) and with `connected.replay` or a nonzero `restart.replay` (a replayed
+anchor would read its rows without the states it trained with). Implementation:
+`connected_context.rs` (buffer, rows, fill, refill, admission, monitors), `Shared::prefix_with`.
+
+Definition. Position k of a stream is the prefix whose newest byte is the k-th visible byte:
+training anchor a (keyed by its anchor index; its newest byte is train byte a-1, or `[START]` at
+an epoch's first anchor), evaluation index t of `window_before(bytes, t, window)`, generation
+index t of `recent_window(text[..t], window)`. Its state s_k is that position's routed final
+output (`Trace::output`, the vector the readout consumes, width d). For a prefix of L bytes whose
+newest byte is position k, row i (i < L-1) is position `k - (L-1-i)`, and
+`row_i = RMS((E[:, b_i] + p_i) + s_{k-(L-1-i)})` when that state is buffered; the newest row
+(no state yet) and rows without a buffered state are built exactly as before. s is a detached
+constant: no adjoint reaches it or the tiles that produced it (no writer credit). E's gradient
+is unchanged in form: `add_prefix_gradient` differentiates the RMS at the stored row values and
+inverse, which is the exact derivative with respect to the pre-normalization sum, and that sum's
+derivative with respect to `E[:, b_i]` is the identity whatever constant s adds (pinned by a
+finite-difference oracle in `connected_context_contracts`).
+
+Buffer (`Context`, session-only, never checkpointed). States of consecutive positions, capacity
+`geometry.context`; a pushed key that does not follow the newest restarts it. Training pushes
+the live anchor's output right after its forward pass (`connected_step::forward`); nothing reads
+the buffer between that push and the anchor's end, since lanes, sections, waves and both replays
+are refused. Stream restart: at an epoch's first anchor (cursor offset 0, prefix `[START]`) the
+buffer is emptied before the push. Rows never reach across the wrap anyway (the prefix clips at
+`[START]`, so row keys stay at or after that anchor); the clear makes the rule explicit.
+
+Warm-up (frozen replays: held-out and retention probes, context reach, evaluation samples,
+`hexweave complete`). With the option on, a replay starts observing a full window earlier:
+`Replay::observed_from` moves the first observed position from `start` (two before the first
+scored byte, or the prompt's last two bytes in generation) to `start - (L-1)`, L the length of
+`start`'s prefix. Every warm-up position runs over true context bytes exactly like a scored
+one (forward, push its state, observe its true next byte and publish records into the replay's
+scratch memory) but is not counted in the loss or in `prompt_observations`; the two existing
+observed positions are part of this range, never observed twice. When the first counted byte is
+scored, buffer and scratch memory look like a replay that had been running for a window. The
+earliest warm-up positions still see partly empty buffers and memory (a span far from its
+stream start is never reproduced exactly). Generation then pushes every generated position
+(also under `--feedback prompt-only`, which freezes memory, not this buffer). Off, the replay
+observes from `start` exactly as before.
+
+Remaining train/evaluation difference. Replays use greedy routes; training states used the
+training routes, `route_training: sampled` by default, which visit other tiles than the argmax.
+Replays also read their own scratch memory with every record at lag 0, while training reads
+under `memory_lag`. Training states were therefore produced by a noisier route distribution
+than the greedy states evaluation adds; the likely direction is that evaluation rows are
+slightly cleaner than the rows the model was trained on, so the measured benefit can be
+mildly optimistic for sampled-route runs and exact in kind for `route_training: greedy`.
+
+Context reach. Warm-up positions read true bytes (no splice); from `start` on, rows older than
+the newest k are raw foreign rows (their state dropped) and each spliced pass pushes its own
+state. Kept rows carry states that were computed from true older context during the warm-up and
+through the chain of earlier kept rows, so with the option on a small-k row no longer isolates
+raw-byte reach: read it as "loss when the distant rows' bytes are foreign but the newest k rows
+keep whatever their states learned from further back", an upper bound on what the raw newest k
+bytes alone could give, and compare k rows across checkpoints rather than against an
+option-off run. The full-window row still equals the held-out score (no splice, same warm-up).
+
+Tile similarity. The shared-section `tile_similarity` probe (`connected_eval_probe::similarity`)
+builds raw rows; it only runs with `connected.shared`, which this option refuses.
+
+Resume (`connected_context::refill`, called by `connected_train::run` after loading, through
+the forward-only `connected_context::fill`). The buffer is refilled for the positions the next
+anchor's rows read, under the restored weights, each with its own anchor's training route draw
+(`connected_route::anchor`, the live anchor's salted draw) and memory cut off before its label
+(`query_before`). Refilled states see only the restored memory, i.e. the newest records the
+checkpoint kept, so the oldest refilled rows are built on less retrieval than training had
+when it computed them; and training had computed them under their own anchors' weights. A
+resume under `context_rows` is therefore not bit-exact against an uninterrupted run; every run
+with the option off keeps its bit-exact resume contract.
+
+Monitors: each `log.jsonl` line carries `context` = {`rows` (older prefix rows of live training
+anchors in the interval), `filled_share` (share of them with a state), `state_to_row_rms` (mean
+RMS(s) / RMS(E[:, b] + p) over filled rows)}; fills are not counted. Staleness (distance between
+a cached state and one recomputed under current weights) is deferred: it needs recomputing old
+prefixes.
+
+Cost. Training: one d-vector clone per anchor and two RMS reductions per filled row (the prefix
+build was already L x d). Buffer: up to `geometry.context` x d x 4 bytes (512 KiB at width 128).
+Evaluation: a held-out probe processes up to `window - 1` warm-up positions before its 130
+previously observed ones (each a forward, a gather and a memory publication): 641 instead of 130
+at a 512-byte window, about 4.9x the probe's scoring time (estimated, not measured), so more
+`partial` scores inside the same budget. Retention probes (window + 2 bytes of left context)
+and evaluation samples add the same warm-up; context reach repeats it for every k row.
+Untested: any quality effect, whether
+states grow stale enough to matter between their push and their last read (up to `window - 1`
+anchors), and the resume discontinuity's effect on loss.
+
 ## Full-run measurements
 
 The optional `connected_eval` object configures assessment time, retention probe
