@@ -1488,6 +1488,30 @@ RMS(s) / RMS(E[:, b] + p) over filled rows)}; fills are not counted. Staleness (
 a cached state and one recomputed under current weights) is deferred: it needs recomputing old
 prefixes.
 
+Context gate. EXPERIMENT, no measurements. The first pilot failed the keep rule (loss matched the
+baseline early, then stalled 0.65 bits/byte worse, with `state_to_row_rms` at 1.0; recorded in
+`.omc/plans/connected-v6-growth-gpu-2026-11-16.md`), so `connected.context_gate` (bool, default
+false, refused unless `context_rows`; off is omitted from serialization and identity) scales the
+states by one learned FP32 scalar g that starts at exactly 0: `row_i = RMS(c_i + g * s_i)`, c_i =
+byte column plus position, s_i still a detached constant. Off keeps the unscaled add. At g = 0 the
+rows equal the raw rows, so a fresh run starts as the baseline. The hope is that the state enters
+only as far as the loss asks for it, but nothing bounds |g|; the pilot watches `context.gate`
+for drift. Gradient: `u_i = norm::backward(row_i, inverse_i, adjoint_i)` is dL/d of
+row i's pre-normalization sum, so `dL/dg = sum over gated rows of dot(u_i, s_i)`, computed by
+`connected_context_gate::gradient` from the full prefix adjoint `connected_anchor::gather` builds
+(`Prefix::gated_states` keeps the s_i; `Credit::gate_gradient`), pinned by a finite-difference
+oracle. g is the single weight of an Adam `Latent` (`State::gate`) stepped once per anchor beside
+the readout bias, with decoupled decay and the update bound (`apply_gate`) but at one tenth of the
+anchor rate (`RATE_SCALE` 0.1): Adam moves g by about the rate per step whatever the gradient's
+size, so at the full rate (0.003 in the pilot) noise alone could random-walk g to full strength
+within a few thousand anchors (a reviewer's rough calculation, not a measurement); its clock
+tracks `anchors`. The checkpoint record carries it as an optional `gate` Adam record (absent
+without the option, so other runs' records and old checkpoints are byte-identical); restore
+validates presence against the option and step against `anchors`. Every row reader uses the
+checkpoint's g: training, resume refill and frozen replays (probes, context reach, samples,
+`hexweave complete`). Log: `context.gate` is g, and `state_to_row_rms` becomes the effective
+`|g| * RMS(s) / RMS(c)`.
+
 Cost. Training: one d-vector clone per anchor and two RMS reductions per filled row (the prefix
 build was already L x d). Buffer: up to `geometry.context` x d x 4 bytes (512 KiB at width 128).
 Evaluation: a held-out probe processes up to `window - 1` warm-up positions before its 130

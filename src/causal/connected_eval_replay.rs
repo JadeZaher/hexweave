@@ -113,10 +113,12 @@ impl<'a> Replay<'a> {
         Some(self.context.as_ref()?.state(key)?.to_vec())
     }
 
-    fn prefix(&self, bytes: &[u8], key: u64, raw_before: usize) -> Result<Prefix> {
+    pub(super) fn prefix(&self, bytes: &[u8], key: u64, raw_before: usize) -> Result<Prefix> {
         match &self.context {
             Some(buffer) => {
-                Ok(connected_context::rows(&self.state.shared, bytes, buffer, key, raw_before)?.0)
+                let gate = super::super::connected_context_gate::value(&self.state.gate);
+                let shared = &self.state.shared;
+                Ok(connected_context::rows(shared, bytes, buffer, key, raw_before, gate)?.0)
             }
             None => self.state.shared.prefix(bytes),
         }

@@ -177,7 +177,7 @@ pub(super) fn step_shared(
             options,
         )?;
     }
-    Ok(())
+    super::connected_context_gate::step(&mut state.gate, credit.gate_gradient, rate, options)
 }
 
 /// Advances the cursor and anchor count and folds the anchor into the counters and baseline.

@@ -13,7 +13,7 @@ use super::{connected_simd, norm};
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub(super) use super::connected_update_scale::apply_bias;
+pub(super) use super::connected_update_scale::{apply_bias, apply_gate};
 
 pub(super) const ROUTE_P_SLOT: usize = MATRIX_COUNT;
 

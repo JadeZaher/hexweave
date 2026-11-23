@@ -94,6 +94,8 @@ pub(super) struct State {
     pub sections: Option<super::connected_sections::Sections>,
     /// Session-only contextual-row buffer, present exactly when `options.context_rows` is.
     pub context: Option<super::connected_context::Context>,
+    /// Context gate master (`weights[0]` is g), present exactly when `options.context_gate` is.
+    pub gate: Option<Latent>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -129,6 +131,8 @@ struct Record {
     balance: Option<super::connected_balance::Estimate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shared: Option<super::connected_sections::Saved>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gate: Option<AdamRecord>,
 }
 
 impl AdamRecord {
@@ -175,6 +179,7 @@ impl State {
             balance: super::connected_balance::fresh(options),
             sections: super::connected_sections::fresh(geometry, seed, options)?,
             context: super::connected_context::fresh(geometry, options),
+            gate: super::connected_context_gate::fresh(options),
         };
         if options.precision == super::connected_precision::Precision::Fp32 {
             state.shared_latent = Some(super::connected_adam::fresh(
@@ -221,6 +226,7 @@ impl State {
             restarts: self.restarts.clone(),
             balance: self.balance.clone(),
             shared,
+            gate: self.gate.as_ref().map(AdamRecord::of),
         };
         let mut payloads = BTreeMap::from([
             ("connected.json".into(), serde_json::to_vec(&record)?),
@@ -274,6 +280,7 @@ impl State {
             balance: record.balance,
             sections,
             context: super::connected_context::fresh(geometry, &record.options),
+            gate: record.gate.map(AdamRecord::latent),
         };
         state.attach_view(super::connected_precision::View::Fp32)?;
         state.validate()?;

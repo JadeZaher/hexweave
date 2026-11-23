@@ -21,6 +21,7 @@ pub(super) fn is_off(value: &bool) -> bool {
 
 /// Admission: `anchor_exact`, `anchor_batch` 1, and no reader of earlier anchors' rows.
 pub(super) fn validate(options: &Options) -> Result<()> {
+    super::connected_context_gate::validate_options(options)?;
     if !options.context_rows {
         return Ok(());
     }
@@ -117,30 +118,39 @@ pub(super) fn fresh(geometry: Geometry, options: &Options) -> Option<Context> {
 }
 
 /// Rows of `bytes` whose newest byte is position `key`: row i is position `key - (L-1-i)` and adds
-/// that position's buffered state; the newest row and rows before `raw_before` stay raw.
+/// that position's buffered state (scaled by `gate` when present); the newest row and rows before
+/// `raw_before` stay raw.
 pub(super) fn rows(
     shared: &Shared,
     bytes: &[u8],
     context: &Context,
     key: u64,
     raw_before: usize,
+    gate: Option<f32>,
 ) -> Result<(Prefix, Tally)> {
     ensure!(!bytes.is_empty(), "invalid visible prefix length");
-    let newest = bytes.len() - 1;
+    let (newest, width) = (bytes.len() - 1, shared.geometry.width);
     let mut tally = Tally {
         rows: newest as u64,
         ..Tally::default()
     };
-    let prefix = shared.prefix_with(bytes, |index, raw| {
+    let strength = super::connected_context_gate::strength(gate);
+    let mut gated = gate.map(|_| vec![0.0f32; bytes.len() * width]);
+    let mut prefix = shared.prefix_with(bytes, gate, |index, raw| {
         if index >= newest || index < raw_before {
             return None;
         }
         let state = context.state(key.checked_sub((newest - index) as u64)?)?;
         tally.filled += 1;
         let raw_rms = super::connected_update_scale::rms(raw);
-        tally.ratio_sum += super::connected_update_scale::rms(state) / raw_rms.max(1e-12);
+        tally.ratio_sum +=
+            strength * super::connected_update_scale::rms(state) / raw_rms.max(1e-12);
+        if let Some(copy) = gated.as_mut() {
+            copy[index * width..(index + 1) * width].copy_from_slice(state);
+        }
         Some(state)
     })?;
+    prefix.gated_states = gated;
     Ok((prefix, tally))
 }
 
@@ -149,7 +159,8 @@ pub(super) fn anchor_prefix(state: &mut State, bytes: &[u8]) -> Result<Prefix> {
     let Some(context) = state.context.as_mut() else {
         return state.shared.prefix(bytes);
     };
-    let (prefix, tally) = rows(&state.shared, bytes, context, state.anchors, 0)?;
+    let gate = super::connected_context_gate::value(&state.gate);
+    let (prefix, tally) = rows(&state.shared, bytes, context, state.anchors, 0, gate)?;
     context.tally.add(&tally);
     Ok(prefix)
 }
@@ -174,12 +185,13 @@ pub(super) fn warm_start(key: u64, length: usize) -> u64 {
 pub(super) fn fill(
     context: &mut Context,
     shared: &Shared,
+    gate: Option<f32>,
     keys: Range<u64>,
     mut bytes: impl FnMut(u64) -> Result<Vec<u8>>,
     mut forward: impl FnMut(u64, &Prefix) -> Result<Trace>,
 ) -> Result<()> {
     for key in keys {
-        let (prefix, _) = rows(shared, &bytes(key)?, context, key, 0)?;
+        let (prefix, _) = rows(shared, &bytes(key)?, context, key, 0, gate)?;
         let trace = forward(key, &prefix)?;
         context.push(key, trace.output);
     }
@@ -218,7 +230,8 @@ pub(super) fn refill<S: TrainingSource>(
         )
     };
     let bytes = |key| source.pending_prefix(&source.replay_cursor(key)?);
-    let result = fill(&mut context, &frozen.shared, keys, bytes, forward);
+    let gate = super::connected_context_gate::value(&frozen.gate);
+    let result = fill(&mut context, &frozen.shared, gate, keys, bytes, forward);
     state.context = Some(context);
     result
 }
@@ -235,5 +248,9 @@ pub(super) fn tally(state: &State) -> Tally {
 /// The log row's `context` object since `previous`; None without contextual rows.
 pub(super) fn report(state: &State, previous: &Tally) -> Option<Value> {
     let context = state.context.as_ref()?;
-    Some(context.tally.report(previous))
+    let mut line = context.tally.report(previous);
+    if let Some(gate) = super::connected_context_gate::value(&state.gate) {
+        line["gate"] = json!(gate);
+    }
+    Some(line)
 }

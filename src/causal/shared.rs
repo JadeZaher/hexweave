@@ -21,6 +21,8 @@ pub(super) struct Prefix {
     pub memory: Vec<f32>,
     pub inverse: Vec<f32>,
     pub shared_version: u64,
+    /// Row-major detached states added to the rows (zero where none), kept for the gate gradient.
+    pub gated_states: Option<Vec<f32>>,
 }
 
 pub(super) struct Readout {
@@ -95,13 +97,15 @@ impl Shared {
 
     /// Rebuild all visible embedding rows for this anchor, including overlapping positions.
     pub fn prefix(&self, bytes: &[u8]) -> Result<Prefix> {
-        self.prefix_with(bytes, |_, _| None)
+        self.prefix_with(bytes, None, |_, _| None)
     }
 
-    /// `prefix`, row i adding `extra(i, raw row)` (a detached constant) before normalization.
+    /// `prefix`, row i adding `gate * extra(i, raw row)` (a detached constant; unscaled when `gate`
+    /// is None) before normalization.
     pub fn prefix_with<'a>(
         &self,
         bytes: &[u8],
+        gate: Option<f32>,
         mut extra: impl FnMut(usize, &[f32]) -> Option<&'a [f32]>,
     ) -> Result<Prefix> {
         ensure!(
@@ -115,7 +119,13 @@ impl Shared {
             positions::add(position, &mut column)?;
             // Contextual rows (CONNECTED.md): E's gradient through `norm::backward` stays exact.
             if let Some(state) = extra(position, &column) {
-                norm::add(&mut column, state)?;
+                match gate {
+                    None => norm::add(&mut column, state)?,
+                    Some(scale) => {
+                        let scaled: Vec<f32> = state.iter().map(|v| scale * v).collect();
+                        norm::add(&mut column, &scaled)?;
+                    }
+                }
             }
             let row = norm::rms(&column)?;
             memory.extend(row.values);
@@ -126,6 +136,7 @@ impl Shared {
             memory,
             inverse,
             shared_version: self.version,
+            gated_states: None,
         })
     }
 

@@ -63,6 +63,8 @@ pub(super) struct Credit {
     pub adjoint_norms: Vec<f64>,
     /// The exact adjoint at the shared read (route entry); None without a read.
     pub read_adjoint: Option<Vec<f32>>,
+    /// dL/dg of the context gate (CONNECTED.md §Contextual rows); None without the option.
+    pub gate_gradient: Option<f32>,
 }
 
 /// Execute a target-free route from the prefix's last row; each frame retains its exact detached
@@ -186,6 +188,8 @@ pub(super) fn gather<S: TileStore>(
     let read_adjoint = trace.read.as_ref().map(|_| upstream);
     let mut embedding = task.embedding_gradient;
     shared.add_prefix_gradient(prefix, &prefix_adjoint, &mut embedding)?;
+    let gate_gradient =
+        super::connected_context_gate::gradient(prefix, &prefix_adjoint, shared.geometry.width)?;
     Ok(Credit {
         loss: task.loss,
         corrections,
@@ -195,6 +199,7 @@ pub(super) fn gather<S: TileStore>(
         output_rms: task.output_rms,
         adjoint_norms,
         read_adjoint,
+        gate_gradient,
     })
 }
 

@@ -102,6 +102,36 @@ pub(super) fn rms(values: &[f32]) -> f64 {
     (square / values.len().max(1) as f64).sqrt()
 }
 
+/// `apply_bias` for the one-weight context gate master `g = latent.weights[0]`.
+pub(super) fn apply_gate(
+    latent: &mut Latent,
+    gradient: f32,
+    rate: f64,
+    options: &Options,
+) -> Result<UpdateMetrics> {
+    let keep = retention(options, rate)?;
+    let bound = options.max_update_norm;
+    ensure!(
+        bound.is_finite() && bound > 0.0,
+        "invalid context gate update bound"
+    );
+    adam::validate(latent, 1)?;
+    let (mut delta, opposed_momentum) = adam::propose(latent, &[gradient], rate)?;
+    let base_norm = length(&delta);
+    connected_simd::scale(&mut delta, bound_scale(1.0, base_norm, bound))?;
+    let applied_norm = length(&delta);
+    decay_add(&mut latent.weights, &delta, keep)?;
+    Ok(UpdateMetrics {
+        transitions: 0,
+        base_norm,
+        applied_norm,
+        gain: 1.0,
+        opposed_momentum,
+        max_rms: rms(&latent.weights),
+        weight_norm: length(&latent.weights),
+    })
+}
+
 /// Adam plus decoupled decay on the FP32 readout bias; uniform norm bound, no RMS cap.
 pub(super) fn apply_bias(
     shared: &mut Shared,

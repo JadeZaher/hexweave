@@ -87,6 +87,8 @@ the exact read adjoint; `teach` pulls at a tile's own adjoint scale); see
 `anchor_batch` 1 only, refused with `shared` and replays) adds each older prefix row's detached
 routed state from a session-only buffer; frozen replays warm it (and their scratch memory) by
 observing a window of true context, and resume refills it forward-only; see [contextual rows](CONNECTED.md#contextual-rows).
+`connected.context_gate` (default false, identity when true; experimental, requires `context_rows`)
+scales those states by one learned scalar starting at 0; see [context gate](CONNECTED.md#contextual-rows).
 
 Connected checkpoint completion uses `connected_completion` and frozen evaluation
 replay. It snapshots the exact named checkpoint into owned `work/inference/`

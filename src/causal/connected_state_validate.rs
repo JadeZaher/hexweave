@@ -94,6 +94,7 @@ impl State {
             self.context.is_some() == self.options.context_rows,
             "connected contextual-row buffer/options mismatch"
         );
+        super::super::connected_context_gate::validate(self)?;
         self.validate_bias()?;
         self.validate_shared()
     }

@@ -115,6 +115,9 @@ pub(super) struct Options {
     /// EXPERIMENT: older prefix rows add their position's detached routed state (CONNECTED.md).
     #[serde(skip_serializing_if = "super::connected_context::is_off")]
     pub context_rows: bool,
+    /// EXPERIMENT: learned scalar (init 0) scaling the buffered states in the rows (CONNECTED.md).
+    #[serde(skip_serializing_if = "super::connected_context::is_off")]
+    pub context_gate: bool,
 }
 
 fn is_true(value: &bool) -> bool {
@@ -152,6 +155,7 @@ impl Default for Options {
             visit_norm: true,
             shared: None,
             context_rows: false,
+            context_gate: false,
         }
     }
 }

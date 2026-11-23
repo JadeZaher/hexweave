@@ -16,6 +16,9 @@ mod context_contracts;
 #[cfg(test)]
 #[path = "connected_eval_contracts.rs"]
 mod contracts;
+#[cfg(test)]
+#[path = "connected_context_gate_contracts.rs"]
+mod gate_contracts;
 #[path = "connected_eval_probe.rs"]
 mod probe;
 #[path = "connected_eval_reach.rs"]

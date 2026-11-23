@@ -15,9 +15,9 @@ use super::super::tuning::{self, Knobs};
 use super::*;
 
 /// Twenty bytes of train and held-out text: 24 anchors wrap the stream once at anchor 20.
-const TEXT: &[u8; 20] = b"the cat sat. a dog.\x03";
+pub(super) const TEXT: &[u8; 20] = b"the cat sat. a dog.\x03";
 
-fn corpus(path: &Path) -> Result<Corpus> {
+pub(super) fn corpus(path: &Path) -> Result<Corpus> {
     let entry = json!({"bytes":TEXT.len(),"sha256":digest(TEXT)});
     let manifest = serde_json::to_vec(&json!({"schema":1,"kind":"byte-corpus",
         "files":{"train.txt":entry,"heldout.txt":entry}}))?;
@@ -30,7 +30,7 @@ fn corpus(path: &Path) -> Result<Corpus> {
 }
 
 /// Greedy routes and zero history, so training and frozen replay read identical tile inputs.
-fn options() -> connected_config::Options {
+pub(super) fn options() -> connected_config::Options {
     connected_config::Options {
         lanes: 2,
         workers: 2,
@@ -50,9 +50,13 @@ fn context_rows_are_identity_under_anchor_exact_and_refuse_other_row_readers() -
         "seed":7,"rate":0.003,"anchors":8,"wall_seconds":60,"checkpoint_every":8,"eval_every":8,
         "eval_cases":1,"resume":false,"connected":{"credit_mode":"anchor_exact"},"tiles":TILES});
     let identity = serde_json::from_value::<Config>(base.clone())?.identity()?;
+    let mut rows_only = base.clone();
+    rows_only["connected"]["context_rows"] = json!(true);
+    let rows_identity = serde_json::from_value::<Config>(rows_only)?.identity()?;
     // (extra key, value, admitted): waves, sections and both replays are refused by this switch.
     for (key, value, admitted) in [
         ("context_rows", json!(true), true),
+        ("context_gate", json!(true), true),
         ("anchor_batch", json!(2), false),
         ("shared", json!({"sections":1}), false),
         ("replay", json!({"capacity":64,"per_anchor":2}), false),
@@ -67,10 +71,24 @@ fn context_rows_are_identity_under_anchor_exact_and_refuse_other_row_readers() -
         changed["connected"][key] = value;
         let config: Config = serde_json::from_value(changed)?;
         match config.validate() {
-            Ok(()) => assert!(admitted && config.identity()? != identity, "{key}"),
+            Ok(()) => {
+                let against = if key == "context_gate" {
+                    &rows_identity
+                } else {
+                    &identity
+                };
+                assert!(admitted && config.identity()? != *against, "{key}");
+            }
             Err(error) => assert!(!admitted && format!("{error:#}").contains("context_rows")),
         }
     }
+    // The gate alone is refused, and an off gate leaves the serialized options untouched.
+    let mut gated = base.clone();
+    gated["connected"]["context_gate"] = json!(true);
+    let refused = serde_json::from_value::<Config>(gated)?.validate();
+    assert!(format!("{:#}", refused.unwrap_err()).contains("context_gate"));
+    let off = serde_json::to_string(&serde_json::from_value::<Config>(base)?.connected)?;
+    assert!(!off.contains("context_gate") && !off.contains("context_rows"));
     Ok(())
 }
 
@@ -97,7 +115,7 @@ fn frozen_replay_resume_and_generation_reproduce_training_rows() -> Result<()> {
         .context
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("buffer"))?;
-    let (rows, tally) = connected_context::rows(&state.shared, &bytes, buffer, 24, 0)?;
+    let (rows, tally) = connected_context::rows(&state.shared, &bytes, buffer, 24, 0, None)?;
     let raw = state.shared.prefix(&bytes)?;
     let d = geometry.width;
     assert_eq!((bytes.len(), tally.filled), (5, 4));

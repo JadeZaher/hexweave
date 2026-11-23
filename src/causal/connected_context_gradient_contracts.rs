@@ -2,6 +2,7 @@
 //! CONNECTED.md §Contextual rows.
 
 use super::connected_context::{self, Context};
+use super::connected_context_gate;
 use super::geometry::VOCAB;
 use super::tuning::{self, Knobs};
 use anyhow::Result;
@@ -21,7 +22,7 @@ fn embedding_gradient_stays_exact_with_a_constant_state_inside_the_row_norm() ->
         let state = (0..d).map(|j| 0.6 * ((key as usize * d + j) as f32 * 0.7).cos());
         context.push(key, state.collect());
     }
-    let (prefix, tally) = connected_context::rows(&shared, bytes, &context, 3, 0)?;
+    let (prefix, tally) = connected_context::rows(&shared, bytes, &context, 3, 0, None)?;
     assert_eq!((tally.rows, tally.filled), (3, 2));
     // f64 oracle on v_i = E[:, b_i] + p_i + s_i: dv_i / dE[:, b_i] is the identity, s_i constant.
     let mut rows = Vec::new();
@@ -70,5 +71,55 @@ fn embedding_gradient_stays_exact_with_a_constant_state_inside_the_row_norm() ->
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn gate_gradient_matches_a_finite_difference_of_the_normalized_rows() -> Result<()> {
+    let _guard = tuning::scoped(Knobs {
+        connected: true,
+        connected_fp32: true,
+        ..Knobs::ORACLE
+    });
+    let (shared, _, _) = super::connected_precision_contracts::explicit(43)?;
+    let (bytes, d, gate) = (b"abab", shared.geometry.width, 0.7f32);
+    let mut context = Context::new(8);
+    for key in 1..3u64 {
+        context.push(
+            key,
+            (0..d)
+                .map(|j| 0.6 * ((key as usize * d + j) as f32 * 0.7).cos())
+                .collect(),
+        );
+    }
+    let (prefix, _) = connected_context::rows(&shared, bytes, &context, 3, 0, Some(gate))?;
+    // f64 oracle: row_i = RMS(c_i + g s_i) for the gated rows 1 and 2; loss = sum w . rows.
+    let weights: Vec<f64> = (0..4 * d).map(|i| (i as f64 * 0.37).sin()).collect();
+    let loss = |g: f64| -> f64 {
+        let mut total = 0.0;
+        for (index, &byte) in bytes.iter().enumerate() {
+            let mut column = shared.embedding_column(usize::from(byte)).unwrap();
+            super::positions::add(index, &mut column).unwrap();
+            let state = context.state(index as u64).filter(|_| index < 3);
+            let row: Vec<f64> = (0..d)
+                .map(|j| f64::from(column[j]) + g * state.map_or(0.0, |s| f64::from(s[j])))
+                .collect();
+            let inverse = (row.iter().map(|v| v * v).sum::<f64>() / d as f64 + 1e-5)
+                .sqrt()
+                .recip();
+            total += (0..d)
+                .map(|j| row[j] * inverse * weights[index * d + j])
+                .sum::<f64>();
+        }
+        total
+    };
+    let numeric = (loss(f64::from(gate) + 1e-5) - loss(f64::from(gate) - 1e-5)) / 2e-5;
+    let adjoint: Vec<f32> = weights.iter().map(|w| *w as f32).collect();
+    let analytic = connected_context_gate::gradient(&prefix, &adjoint, d)?.unwrap();
+    assert!(numeric.abs() > 1e-3, "oracle must be nonzero: {numeric}");
+    assert!(
+        (f64::from(analytic) - numeric).abs() <= 1e-3 * (1.0 + numeric.abs()),
+        "{analytic} vs {numeric}"
+    );
     Ok(())
 }
