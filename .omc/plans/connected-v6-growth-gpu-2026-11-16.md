@@ -228,6 +228,36 @@ seed. Code at commit 546f6cf.
 - Checkpoints and tile files of the run were deleted; logs, reports and scores are kept under
   `work/core-runs/` and `work/inference/context-pilot-20261122/`.
 
+#### Step 1 with a learned gate (2026-11-23): level with arm B, no added reach
+
+Run `connected-fp32-v63-gate-19t-s7-20261123`: the step 1 pilot's config plus
+`connected.context_gate` (row = RMS(byte + position + g * state), one learned g from 0, stepped
+at a tenth of the bias rate). One leg, 192,730 positions, 2.25 training hours. One seed.
+
+| Measure | Gated rows | Arm B |
+| :--- | ---: | ---: |
+| Held-out, same 16 spans, mean at 131,072 / 147,456 / 163,840 / 180,224 | 3.13 | 3.08 |
+| Held-out, same 16 spans, at 2.25 training hours | 3.00 (192,730 pos.) | 2.96 (212,992 pos.) |
+| Positions per training second | about 24 | about 28 |
+| Evaluation time | 60 to 80 s | 32 s |
+| Sampled text, real-word share (nucleus) | 0.80 at 192,730 | 0.74 at 179,015 |
+| Sampled text, mean word length (nucleus) | 3.24 | 3.27 |
+
+- Fails the keep rule (not 0.05 better at matched positions or hours); within evaluation noise of
+  arm B at every stop but one (147,456: 3.41 against 3.19).
+- g went negative: -0.11 by 16,384 positions, -0.18 at the end and still slowly growing in size.
+  The effective state share of a row stayed at 0.11 to 0.19.
+- Reach on the final checkpoint: 1 byte 4.65, 4 bytes 3.04, 32 bytes 3.02, full window 3.00;
+  first-letter loss 4.66 at every length past two bytes. The distant-context gain of the ungated
+  run is gone: the model again reads about four bytes.
+- Reading: turning the state down removes the damage of the ungated run, which supports "the
+  full-strength state swamped the byte signal". It does not make the state useful. Why g prefers
+  a small negative value is not shown (subtracting the previous output state may act as a
+  decorrelating term; untested).
+- The text score is at 13,715 more positions than arm B's, so it is not a matched comparison.
+- Checkpoints and tile files deleted; logs and scores kept under
+  `work/inference/gate-pilot-20261123/`.
+
 ## Phase 2: dynamic tile count by cloning
 
 **Question:** can the model add capacity where it is needed without a relearning dip?
